@@ -76,6 +76,7 @@ $adapter = new ImapEngineAdapter([
     'authentication' => ['method' => 'plain', 'username' => 'user', 'credential_ref' => 'imap-main'],
     'timeout_seconds' => 5,
     'validate_certificate' => false,
+    ...(in_array('--deadline', $argv, true) ? ['_request_deadline' => microtime(true) + 20] : []),
 ], 'password');
 
 $checks = 0;

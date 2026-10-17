@@ -70,7 +70,7 @@ final class AccountRepository
         if (!hash_equals($userId, (string) ($runtime['owner_user_id'] ?? ''))) {
             throw new NotFoundException('Account wurde für den angemeldeten Benutzer nicht gefunden.');
         }
-        return $this->json->read($path);
+        return $this->withoutSecrets($this->json->read($path));
     }
 
     public function update(string $userId, string $accountId, array $input, ?callable $beforePublish = null): array
@@ -106,6 +106,7 @@ final class AccountRepository
 
     private function withoutSecrets(array $config): array
     {
+        $config['sync'] ??= ['interval_minutes' => 0];
         return $config;
     }
 }

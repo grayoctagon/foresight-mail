@@ -167,6 +167,7 @@ Fehler enthalten `ok:false`, `data:null` und `error:{code,message}`. Bestehende 
 | GET `/webmail/capabilities` | tatsächlich unterstützte Funktionen |
 | POST `/accounts/{account}/sync/start` | persistenten Job anlegen oder fortsetzen |
 | POST `/accounts/{account}/sync/advance` | genau einen Sync-Arbeitsschritt ausführen |
+| POST `/accounts/{account}/sync/check` | Fälligkeit prüfen, ggf. einen automatischen Schritt ausführen; `retryAfterSeconds` 60/300, `reason`, `syncing`, `job`, optional `nextDueAt` |
 | GET `/accounts/{account}/sync/status` | persistenter Job, Phase, Fortschritt, ETA, Fehler |
 | GET `/accounts/{account}/mirror` | bisherige kompatible Ordner-/Location-Liste |
 | GET `/accounts/{account}/objects/{hash}` | Original-EML nach Content-Hash als Download |
@@ -197,7 +198,17 @@ Body-Vorschauen sind auf 2 MiB pro Text-/HTML-Teil begrenzt. CID-Rasterbilder er
 
 Die bestehende read-only Architektur bleibt erhalten: `BODY.PEEK[]`, UID/UIDVALIDITY, Flags, INTERNALDATE, MODSEQ, EMAILID/MAILBOXID, Deduplizierung und Recovery. Es wird kein `ext-imap` verwendet.
 
-Phasen: `discover_mailboxes` → `index_mailboxes` → `fetch_content` → `finalize`. Die UI startet über ↻ oder die Sync-Einstellungen und ruft `advance` strikt sequenziell auf. Pause wirkt nach Abschluss des laufenden Schritts. Schließen des Browsers beendet die Aufrufkette, nicht den gespeicherten Job. Netzwerkfehler werden angezeigt und müssen bewusst fortgesetzt werden.
+Phasen: `discover_mailboxes` → `index_mailboxes` → `fetch_content` → `finalize`. Manuell startet die UI über ↻ oder die Sync-Einstellungen und ruft `advance` strikt sequenziell auf. Pause wirkt nach Abschluss des laufenden Schritts. Schließen des Browsers beendet die Aufrufkette, nicht den gespeicherten Job. Manuelle Netzwerkfehler werden angezeigt und können bewusst fortgesetzt werden.
+
+Unter **Einstellungen → Postfächer → Automatisch synchronisieren** ist je Postfach `sync.interval_minutes` konfigurierbar: **nur manuell** (`0`, auch Standard für bestehende Postfächer), 15/30 Minuten oder 1/2/4/6/8/12/24 Stunden. Die Middleware entscheidet anhand des letzten abgeschlossenen bzw. fehlgeschlagenen Jobs über die Fälligkeit. Ohne bisherigen Job ist ein automatisches Postfach sofort fällig. Deaktivierte Postfächer starten nicht.
+
+Nach Anmeldung und nach geänderten Postfacheinstellungen prüft der Browser erstmals zeitnah, danach je Postfach normalerweise alle **5 Minuten** über den authentifizierten, CSRF-geschützten POST-Endpunkt `sync/check`. Dieser antwortet mit Status und `Retry-After`, ohne auf den gesamten Lauf zu warten. Ein laufender automatischer Job wird frühestens nach **1 Minute** um einen Arbeitsschritt fortgesetzt. Reservierte Slots in `sync/automatic.json` verhindern doppelte automatische Schritte durch mehrere Tabs. Abgeschlossene oder fehlgeschlagene Läufe warten vor dem nächsten Start wieder das Postfachintervall; temporäre Fehler laufender automatischer Jobs werden frühestens nach einer Minute erneut versucht. Fehler bleiben in der UI sichtbar. Automatikjobs tragen `trigger: automatic`; ein expliziter manueller Start übernimmt den Job als `manual`. Pausierte manuelle Jobs werden vom Polling nicht eigenmächtig fortgesetzt.
+
+Während eines automatischen Syncs liest ein **unabhängiger Timer alle 5 Sekunden ausschließlich den gespeicherten Status** über GET `sync/status` – auch während ein `sync/check`-POST noch läuft. Diese GET-Aufrufe starten keinen Job, führen keinen Arbeitsschritt aus und stellen keine IMAP-Verbindung her. Statusabrufe überlappen sich innerhalb eines Tabs nicht. Sie enden bei Abschluss, Fehlschlag, manueller Übernahme oder Abmeldung; bei Status-API-Fehlern wird auf eine Minute zurückgeschaltet. Die Arbeitsabstände von einer Minute und die normale Fälligkeitsprüfung alle fünf Minuten bleiben davon unabhängig.
+
+Automatische Schritte begrenzen das Arbeitsbudget auf höchstens **15 Sekunden**, den IMAP-Sockettimeout auf **5 Sekunden** und die gesamte IMAP-I/O auf eine **20-Sekunden-Deadline** (auch bei tröpfelnden Antworten). Kleinere bestehende Limits bleiben erhalten. Konservative Batchgrenzen: höchstens 250 Indexeinträge, 100 Metadaten pro Batch und 10 Inhalte je Schritt. Gespeicherte Konfiguration und manuelle Performance-Limits bleiben unverändert. Ziel sind Antworten deutlich unter 30 Sekunden. Dies ist keine harte Hosting-Garantie: Betriebssystem-DNS-Auflösung, Dateisystem und einzelne große lokale Schreib-/MIME-Operationen können nicht portabel unterbrochen werden. Bei einem abgebrochenen Request bleiben Job und Recovery-Marker fortsetzbar; es gibt keinen unsichtbaren Hintergrundworker.
+
+Automatik funktioniert derzeit **nur bei angemeldet geöffnetem Browser**; Hintergrund-Tabs können vom Browser verzögert werden. Ohne offene Anwendung wird der gespeicherte Job nicht weitergetrieben. Ein serverseitiger Cron-/Scheduler-Einstieg ist als Folgearbeit in [TODO.md](TODO.md) vorgemerkt.
 
 ```bash
 php bin/foresight sync-start <account-id>
@@ -209,9 +220,9 @@ php bin/foresight rebuild-metadata <account-id> <sha256>
 
 Der frühere CLI-Einstieg `bin/mailmirror` bleibt als Weiterleitung erhalten. Für neue Konfigurationen gelten `FORESIGHT_DEPLOYMENT_FILE` und `FORESIGHT_MEMORY_LIMIT`; bisherige `MAILMIRROR_*`-Variablen werden weiterhin als Fallback akzeptiert.
 
-Cron ist optional; es gibt keinen eingebauten Scheduler und keinen erforderlichen dauerhaften Worker. Für wiederkehrende Synchronisationsläufe muss die Aufrufkette `sync-start` zum Anlegen bzw. Fortsetzen eines Jobs und anschließend wiederholt `sync-step` verwenden. Jeder Schritt erledigt nur eine Arbeitseinheit; `sync-status` zeigt Fortschritt und Fehler. Nach einem abgeschlossenen oder fehlgeschlagenen Job legt erst ein erneutes `sync-start` einen neuen Job an. Allein wiederholtes `sync-step` startet nach einem abgeschlossenen Job keinen weiteren Lauf. Bei Fehlern muss die Aufrufkette anhalten bzw. nach einer bewussten Retry-Regel fortsetzen; sie darf nicht unbegrenzt eng weiterlaufen.
+Es wird noch kein serverseitiger Cronjob eingerichtet und kein dauerhafter Worker benötigt. Die CLI lässt sich weiterhin für eigene Aufrufketten verwenden: `sync-start` legt einen Job an bzw. setzt ihn fort, wiederholtes `sync-step` erledigt jeweils eine Arbeitseinheit; `sync-status` zeigt Fortschritt und Fehler. Nach einem abgeschlossenen oder fehlgeschlagenen Job legt erst ein erneutes `sync-start` einen neuen Job an. Allein wiederholtes `sync-step` startet nach einem abgeschlossenen Job keinen weiteren Lauf. Eigene Aufrufketten müssen ihre Fälligkeit und Retry-Regeln selbst steuern.
 
-Account-Locks verhindern parallele Sync-Schreibarbeit. Lock- und Runtime-Dateien müssen für PHP und ggf. den CLI-Benutzer zugänglich sein. Die CLI-Beispiele sind aus dem Projektverzeichnis auszuführen; Cron sollte dieses Arbeitsverzeichnis ausdrücklich setzen oder den CLI-Einstieg über einen absoluten Dateipfad aufrufen.
+Ein gemeinsames, nicht blockierendes `flock` auf `locks/sync.lock` schützt pro Postfach **Job-Erstellung, Fälligkeitsentscheidung und jeden Sync-Schreibschritt** – auch zwischen Tabs, Sessions, API und CLI. Der Zustand wird erst nach Erhalt der Sperre gelesen; besetzte Postfächer liefern sofort `busy` statt paralleler Arbeit. Betriebssystem-Locks werden auch bei Prozessende freigegeben; die Lockdatei darf bestehen bleiben. Lock- und Runtime-Dateien müssen für PHP und ggf. den CLI-Benutzer zugänglich sein. Die CLI-Beispiele sind aus dem Projektverzeichnis auszuführen.
 
 ## Installation und Managed PHP Hosting
 
@@ -268,8 +279,10 @@ Der Secret Store enthält entsprechend der bestehenden V1 Klartext-Passwörter m
 ```bash
 php tests/run.php
 php tests/imapengine-integration.php
+php tests/imapengine-integration.php --deadline
 php tests/deployment.php
 php tests/security.php
+php tests/sync.php
 php tests/webmail.php
 php tests/webmail.php --mount=/mail
 php tests/webmail.php --mount=/foresight-mail
@@ -294,11 +307,13 @@ node tests/preview-rules.mjs
 bash tests/run-browser.sh
 ```
 
-`NODE_PATH` macht die separat installierte Bibliothek für die CommonJS-Testskripte auffindbar; die Variable gilt in diesem Terminal. `tests/run-browser.sh` startet eine isolierte PHP-Testumgebung mit synthetischen Konten, führt die drei Browser-Suites aus und beendet die Umgebung anschließend. Optional wählt `FORESIGHT_NODE` den Node-Dateipfad. Die vollständigen Browser-Suites dürfen nicht gegen produktive Konten laufen. Für manuelle QA startet `php tests/webmail.php --mount=/mail --serve` die Umgebung und gibt `BROWSER_QA_URL` aus; danach mit Strg+C beenden.
+`NODE_PATH` macht die separat installierte Bibliothek für die CommonJS-Testskripte auffindbar; die Variable gilt in diesem Terminal. `tests/run-browser.sh` startet eine isolierte PHP-Testumgebung mit synthetischen Konten, führt die vier Browser-Suites aus und beendet die Umgebung anschließend. Optional wählt `FORESIGHT_NODE` den Node-Dateipfad. Die vollständigen Browser-Suites dürfen nicht gegen produktive Konten laufen. Für manuelle QA startet `php tests/webmail.php --mount=/mail --serve` die Umgebung und gibt `BROWSER_QA_URL` aus; danach mit Strg+C beenden.
 
 `WEBMAIL_SCREENSHOTS` legt bei direktem Aufruf den Ausgabeordner der allgemeinen Browser-Suite fest; der Runner verwendet dafür ein eigenes temporäres Verzeichnis. Die Tests prüfen Login, HTML/Text, Header, Downloads, Einstellungen/Identität, Suche/Favoriten, Spaltenwahl und persistierte Reihenfolge, Drag-and-drop, Resizer, mobile Ansicht, Benutzerwechsel und verspätete Antworten. `tests/preview.cjs` prüft Textstandard, alle vier Regeloptionen, Priorität, Persistenz, CRUD, Optionssprung, Mobilansicht und Benutzertrennung. Es dürfen weder JavaScript-Fehler noch unerwünschte externe Abrufe auftreten. Die separate Spaltenprüfung verwendet ausschließlich synthetischen Browserzustand ohne Server-Schreibzugriffe.
 
 ### Automatische Tests
+
+`tests/sync.php` prüft Intervallvalidierung, Altbestände, Fälligkeit/Fehlerabstände, Benutzertrennung, fortsetzbare automatische Schritte, Mehrprozessrennen bei Start und Prüfung sowie die I/O-Deadline bei tröpfelnden Antworten. `tests/sync.cjs` prüft die Intervallauswahl samt echtem API-Speichern, getrennte virtuelle 5-Sekunden-/1-Minuten-/5-Minuten-Abstände, Statusabrufe während eines noch laufenden Arbeitsrequests und Polling-Isolation bei Logout/Benutzerwechsel. Sämtliche Daten sind synthetisch; Scheduler-Browserantworten werden abgefangen, ohne IMAP-Verbindungen auszulösen.
 
 [.github/workflows/tests.yml](.github/workflows/tests.yml) startet bei Push, Pull Request und manuellem Aufruf. PHP 8.3/8.4 prüfen Syntax, Composer, Backend, Sicherheitsfälle und die API an vier URL-Mounts; ein weiterer Job prüft Regeln und Browser unter PHP 8.3/Node 24. Actions sind auf Commit-SHAs und Playwright auf eine getestete Version festgelegt. Der Workflow benötigt keine Secrets und hat nur Lesezugriff auf das Repository. Er verwendet keine echten Konten oder produktiven Daten und wird nach dem Push der Workflow-Datei auf GitHub ausgeführt.
 
@@ -309,7 +324,7 @@ bash tests/run-browser.sh
 - KI-Zusammenfassungen, AI-Suche, AI-Chat, AI-Bewertungen, Fristen und Spam-/Phishing-Meldedienste sind nicht implementiert. Soweit zugehörige UI-Elemente vorhanden sind, bleiben ihre Werte leer oder Controls deaktiviert; es werden keine Mock-Ergebnisse erzeugt.
 - Eigenständige Kontakt- und Themenübersichten sind geplant, aber noch nicht vorhanden.
 - Suche umfasst Header/Snippet, nicht vollständige Bodies. Kein Suchindex mit SQL oder externer Suchmaschine.
-- Kein Live-Push/IDLE: neue Mails erscheinen nach einem ausdrücklich gestarteten Sync oder Cron-Lauf.
+- Kein Live-Push/IDLE: neue Mails erscheinen nach manuellem oder browsergesteuertem automatischem Sync; ein serverseitiger Scheduler ist noch geplant.
 - Keine automatische Garbage Collection von EML-Objekten; referenzlose historische Inhalte bleiben erhalten. Abgeleitete Webmail-Indizes können bei angehaltenen Zugriffen entfernt und wieder aufgebaut werden.
 - Die bestehende ImapEngine-Verarbeitung hält einen vollständigen IMAP-Literal beim Download als PHP-String. Standard-Memory-Limit ist 512 MiB; das 100-MB-Ziel wird getestet. MIME-Lesezugriff arbeitet anschließend mit Datei-Streams.
 - Die Sicherheitsgrenzen eines Servers gelten weiterhin: kompromittierter PHP-Prozess/Host kann den privaten Secret Store lesen.

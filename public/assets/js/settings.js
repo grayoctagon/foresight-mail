@@ -47,7 +47,7 @@ function identityFields(identity={},i=0) {
 }
 function renderAccount() {
     const fresh=!draft.account_id;
-    $('#settingsMain').innerHTML=`<h1>${fresh?'Postfach hinzufügen':'Postfach: '+esc(draft.label)}</h1><p class="settings-lead">IMAP-Verbindung, SMTP und Absenderidentitäten. Bestehende Passwörter bleiben bei leeren Passwortfeldern unverändert.</p><form id="accountForm"><div id="accountError" class="form-message" hidden role="alert"></div><div class="settings-card"><div class="settings-grid">${input('label','Postfachname / Label',draft.label,'text','required maxlength="120"')}${check('enabled','Postfach aktiv',draft.enabled)}</div></div>
+    $('#settingsMain').innerHTML=`<h1>${fresh?'Postfach hinzufügen':'Postfach: '+esc(draft.label)}</h1><p class="settings-lead">IMAP-Verbindung, SMTP und Absenderidentitäten. Bestehende Passwörter bleiben bei leeren Passwortfeldern unverändert.</p><form id="accountForm"><div id="accountError" class="form-message" hidden role="alert"></div><div class="settings-card"><div class="settings-grid">${input('label','Postfachname / Label',draft.label,'text','required maxlength="120"')}${check('enabled','Postfach aktiv',draft.enabled)}${select('sync.interval_minutes','Automatisch synchronisieren',String(draft.sync?.interval_minutes??0),[['0','Nur manuell'],['15','Alle 15 Minuten'],['30','Alle 30 Minuten'],['60','Jede Stunde'],['120','Alle 2 Stunden'],['240','Alle 4 Stunden'],['360','Alle 6 Stunden'],['480','Alle 8 Stunden'],['720','Alle 12 Stunden'],['1440','Alle 24 Stunden']])}</div><p class="settings-note">Solange foresight angemeldet geöffnet ist, prüft der Browser alle 5 Minuten, ob ein Sync fällig ist. Bei laufenden automatischen Syncs wird alle 5 Sekunden nur der gespeicherte Status gelesen; weitere Arbeitsschritte erfolgen frühestens nach 1 Minute. Das Intervall zählt ab Abschluss bzw. Fehlschlag des letzten Laufs. Ohne geöffneten Browser findet noch kein automatischer Sync statt.</p></div>
         <h2>IMAP</h2><div class="settings-card">${serverFields('imap',draft.imap)}<div id="imapSecurityWarning" class="settings-note settings-warning" hidden>Diese Verbindung ist unsicher. TLS und Zertifikatsprüfung werden empfohlen.</div></div>
         <h2>SMTP (Vorbereitung)</h2><div class="settings-card"><label class="check-line"><input id="smtpEnabled" type="checkbox" ${draft.smtp?'checked':''}>SMTP konfigurieren</label><p class="settings-note">Die Einstellungen werden gespeichert; Versand ist in dieser Version noch nicht verfügbar. Envelope-From wird pro Absenderidentität festgelegt.</p><fieldset id="smtpFields" ${!draft.smtp?'hidden disabled':''}>${serverFields('smtp',draft.smtp||serverDefault(true))}</fieldset><div id="smtpSecurityWarning" class="settings-note settings-warning" hidden>Diese Verbindung ist unsicher.</div></div>
         <h2>Send-as / Aliase</h2><div id="identityList">${draft.identities.map(identityFields).join('')}</div><button class="btn small" id="addIdentity" type="button">＋ Identität hinzufügen</button>
@@ -73,6 +73,7 @@ function collectAccount() {
         target[parts.at(-1)]=el.type==='checkbox'?el.checked:el.type==='number'?Number(el.value):el.value;
     });
     result.identities=[...identities.values()].map(i=>({...i,reply_to:(i.reply_to||'').split(',').map(a=>a.trim()).filter(Boolean).map(a=>{const m=a.match(/^(.*?)\s*<([^>]+)>$/);return {display_name:m?m[1]:'',address:m?m[2]:a};})}));
+    result.sync.interval_minutes=Number(result.sync.interval_minutes);
     return result;
 }
 async function saveAccount(event) {
@@ -83,6 +84,7 @@ async function saveAccount(event) {
         if(state.session!==session)return;
         accountId=result.account.account_id;await loadFolders();
         if(state.session!==session)return;
+        window.dispatchEvent(new Event('sync-settings-changed'));
         if(form===$('#accountForm'))renderSettings();
         toast('Postfacheinstellungen gespeichert.','success');
     } catch(error) {

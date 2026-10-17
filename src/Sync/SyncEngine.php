@@ -7,6 +7,7 @@ namespace MailMirror\Sync;
 use DirectoryTree\ImapEngine\Exceptions\Exception as ImapException;
 use MailMirror\Config\AccountRepository;
 use MailMirror\Exception\ConfigurationException;
+use MailMirror\Exception\BusyException;
 use MailMirror\Exception\CorruptStorageException;
 use MailMirror\Exception\IntegrityException;
 use MailMirror\Exception\RemoteMessageGoneException;
@@ -35,18 +36,31 @@ final class SyncEngine
         private readonly PathResolver $paths,
         private readonly JsonStore $json,
         private readonly SyncLogger $logger,
+        private readonly ?\Closure $clock = null,
     ) {
     }
 
     public function start(string $userId, string $accountId): array
     {
-        $config = $this->accounts->get($userId, $accountId);
-        if (!($config['enabled'] ?? false)) {
-            throw new ConfigurationException('Der Account ist deaktiviert.');
+        $this->accounts->get($userId, $accountId);
+        $lock = $this->lock($userId, $accountId);
+        if ($lock === null) {
+            $job = $this->jobs->status($userId, $accountId);
+            if ($job === null) throw new BusyException('Dieses Postfach wird gerade synchronisiert. Bitte erneut prüfen.');
+            return $job + ['busy' => true];
         }
-        $job = $this->jobs->start($userId, $accountId);
-        $this->logger->log($userId, $accountId, 'info', 'sync_started', ['job_id' => $job['job_id']]);
-        return $job;
+        try {
+            $config = $this->accounts->get($userId, $accountId);
+            if (!($config['enabled'] ?? false)) throw new ConfigurationException('Der Account ist deaktiviert.');
+            $job = $this->jobs->start($userId, $accountId);
+            // An explicit start takes over a scheduled job, including a paused one.
+            $job['trigger'] = 'manual';
+            $job = $this->jobs->save($userId, $accountId, $job);
+            $this->logger->log($userId, $accountId, 'info', 'sync_started', ['job_id' => $job['job_id']]);
+            return $this->jobs->decorate($job);
+        } finally {
+            $lock->release();
+        }
     }
 
     public function status(string $userId, string $accountId): ?array
@@ -57,7 +71,92 @@ final class SyncEngine
 
     public function advance(string $userId, string $accountId): array
     {
-        $config = $this->accounts->get($userId, $accountId);
+        $this->accounts->get($userId, $accountId);
+        $lock = $this->lock($userId, $accountId);
+        if ($lock === null) {
+            $job = $this->jobs->status($userId, $accountId);
+            if ($job === null) throw new BusyException('Dieses Postfach wird gerade synchronisiert. Bitte erneut prüfen.');
+            return $job + ['busy' => true];
+        }
+        try {
+            $config = $this->accounts->get($userId, $accountId);
+            if (!($config['enabled'] ?? false)) throw new ConfigurationException('Der Account ist deaktiviert.');
+            return $this->advanceLocked($userId, $accountId, $config);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** Browser-driven scheduler: local decision and at most one bounded work unit. */
+    public function check(string $userId, string $accountId): array
+    {
+        $this->accounts->get($userId, $accountId);
+        $lock = $this->lock($userId, $accountId);
+        if ($lock === null) {
+            return $this->checkResult($this->jobs->status($userId, $accountId), 'busy', 60);
+        }
+        try {
+            $config = $this->accounts->get($userId, $accountId);
+            $job = $this->jobs->status($userId, $accountId);
+            $interval = (int) ($config['sync']['interval_minutes'] ?? 0);
+            if (!($config['enabled'] ?? false) || $interval === 0) {
+                return $this->checkResult($job, $config['enabled'] ? 'manual' : 'disabled', 300);
+            }
+            $active = $job !== null && in_array($job['state'], ['queued', 'running'], true);
+            if ($active && ($job['trigger'] ?? 'manual') !== 'automatic') {
+                // Do not resume explicitly paused/manual work behind the user's back.
+                return $this->checkResult($job, 'manual_job', 60);
+            }
+            $now = $this->clock === null ? time() : ($this->clock)();
+            $runtime = $this->paths->account($userId, $accountId).'/sync/automatic.json';
+            $schedule = is_file($runtime) ? $this->json->read($runtime) : [];
+            if ($active) {
+                if (($schedule['job_id'] ?? null) === $job['job_id'] && (int) ($schedule['next_step_at'] ?? 0) > $now) {
+                    return $this->checkResult($job, 'running', 60);
+                }
+            } else {
+                // Completed and failed attempts both wait an interval; no tight failure loop.
+                $reference = $job === null ? 0 : (strtotime($job['completed_at'] ?? $job['updated_at'] ?? $job['started_at']) ?: 0);
+                $dueAt = $reference > 0 ? $reference + $interval * 60 : $now;
+                if ($dueAt > $now) return $this->checkResult($job, 'not_due', 300, $dueAt);
+                $job = $this->jobs->start($userId, $accountId);
+                $job['trigger'] = 'automatic';
+                $job = $this->jobs->save($userId, $accountId, $job);
+                $this->logger->log($userId, $accountId, 'info', 'automatic_sync_started', ['job_id' => $job['job_id']]);
+            }
+            // Reserve the next slot before doing I/O; multiple tabs cannot double-step.
+            $this->json->write($runtime, ['job_id' => $job['job_id'], 'next_step_at' => $now + 60]);
+            $config['performance']['max_request_runtime_seconds'] = min(15, (int) $config['performance']['max_request_runtime_seconds']);
+            $config['performance']['max_index_entries_per_request'] = min(250, (int) $config['performance']['max_index_entries_per_request']);
+            $config['performance']['imap_metadata_batch_size'] = min(100, (int) $config['performance']['imap_metadata_batch_size']);
+            $config['performance']['max_content_messages_per_request'] = min(10, (int) $config['performance']['max_content_messages_per_request']);
+            $config['imap']['timeout_seconds'] = min(5, (int) $config['imap']['timeout_seconds']);
+            $config['imap']['_request_deadline'] = microtime(true) + 20;
+            $job = $this->advanceLocked($userId, $accountId, $config);
+            $active = in_array($job['state'], ['queued', 'running'], true);
+            $finishedAt = $this->clock === null ? time() : ($this->clock)();
+            $this->json->write($runtime, ['job_id' => $job['job_id'], 'next_step_at' => $finishedAt + 60]);
+            return $this->checkResult($job, $active ? 'running' : $job['state'], $active ? 60 : 300);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function checkResult(?array $job, string $reason, int $retry, ?int $dueAt = null): array
+    {
+        return ['job' => $job, 'reason' => $reason, 'syncing' => in_array($reason, ['running', 'busy', 'manual_job'], true),
+            'retryAfterSeconds' => $retry, 'nextDueAt' => $dueAt === null ? null : gmdate('c', $dueAt)];
+    }
+
+    private function lock(string $userId, string $accountId): ?AccountLock
+    {
+        $lock = new AccountLock();
+        return $lock->acquire($this->paths->account($userId, $accountId).'/locks/sync.lock') ? $lock : null;
+    }
+
+    /** Must only be called while holding the account sync lock. Re-read after locking. */
+    private function advanceLocked(string $userId, string $accountId, array $config): array
+    {
         $job = $this->jobs->active($userId, $accountId);
         if ($job === null) {
             $job = $this->jobs->start($userId, $accountId);
@@ -65,14 +164,6 @@ final class SyncEngine
         }
         if (in_array($job['state'] ?? null, ['completed', 'failed'], true)) {
             return $this->jobs->decorate($job);
-        }
-
-        $lock = new AccountLock();
-        $lockPath = $this->paths->account($userId, $accountId).'/locks/sync.lock';
-        if (!$lock->acquire($lockPath)) {
-            $status = $this->jobs->decorate($job);
-            $status['busy'] = true;
-            return $status;
         }
 
         $adapter = null;
@@ -90,7 +181,7 @@ final class SyncEngine
             $adapter = $this->imapFactory->make($config, $userId, $accountId);
             $job = match ($job['phase']) {
                 'discover_mailboxes' => $this->discover($userId, $accountId, $config, $job, $adapter),
-                'index_mailboxes' => $this->index($userId, $accountId, $config, $job, $adapter),
+                'index_mailboxes' => $this->index($userId, $accountId, $config, $job, $adapter, $requestStarted),
                 'fetch_content' => $this->fetchContent($userId, $accountId, $config, $job, $adapter, $requestStarted),
                 'finalize' => $this->finalize($userId, $accountId, $config, $job, $adapter),
                 default => throw new \LogicException('Unbekannte Sync-Phase.'),
@@ -122,7 +213,6 @@ final class SyncEngine
             return $this->jobs->decorate($job);
         } finally {
             $adapter?->disconnect();
-            $lock->release();
         }
     }
 
@@ -152,7 +242,7 @@ final class SyncEngine
         return $job;
     }
 
-    private function index(string $userId, string $accountId, array $config, array $job, ImapAdapterInterface $imap): array
+    private function index(string $userId, string $accountId, array $config, array $job, ImapAdapterInterface $imap, float $requestStarted): array
     {
         $mailboxes = $this->selectableMailboxes($userId, $accountId);
         $mailboxIndex = (int) ($job['mailbox_index'] ?? 0);
@@ -193,9 +283,13 @@ final class SyncEngine
         $metadata = [];
         $metadataBatchSize = (int) $config['performance']['imap_metadata_batch_size'];
         $useEmailId = (bool) ($config['imap']['use_emailid_optimization'] ?? true);
+        $processedUids = [];
         foreach (array_chunk($batchUids, $metadataBatchSize) as $chunk) {
+            if ($processedUids !== [] && microtime(true) - $requestStarted >= (int) $config['performance']['max_request_runtime_seconds']) break;
             $metadata += $imap->fetchMetadata($chunk, $useEmailId);
+            array_push($processedUids, ...$chunk);
         }
+        $batchUids = $processedUids;
         $serverScope = $this->serverScope($config);
         foreach ($batchUids as $uid) {
             if (!isset($metadata[$uid])) {

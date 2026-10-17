@@ -122,6 +122,14 @@ try {
     $r=$request('alice','/accounts');$assert(count($r['data']['accounts'])===1,'Account-Liste des angemeldeten Benutzers');
     $r=$request('bob','/accounts');$assert($r['data']['accounts']===[],'Fremde Accounts erscheinen nicht in der Liste');
     $r=$request('alice','/accounts/'.$account);$assert($r['data']['account']['account_id']===$account,'Eigenen Account lesen');
+    $assert($r['data']['account']['sync']['interval_minutes']===0,'API liefert sicheren manuellen Sync-Standard');
+    $r=$request('alice','/accounts/'.$account.'/sync/check','POST',null,false);$assert($r['status']===401,'Automatische Sync-Prüfung benötigt CSRF');
+    $r=$request('bob','/accounts/'.$account.'/sync/check','POST');$assert($r['status']===404,'Automatische Sync-Prüfung verweigert fremde Postfächer');
+    $r=$request('alice','/accounts/'.$account.'/sync/check','POST');
+    $assert($r['status']===200 && $r['data']['reason']==='manual' && $r['data']['job']===null && $r['data']['retryAfterSeconds']===300 && in_array('Retry-After: 300',$r['headers'],true),'Manuelle Postfächer prüfen ohne IMAP und ohne Job, inklusive Poll-Intervall');
+    $r=$request('alice','/accounts/'.$account,'PUT',['sync'=>['interval_minutes'=>45]]);$assert($r['status']===422,'API lehnt ungültige Sync-Intervalle ab');
+    $r=$request('alice','/accounts/'.$account,'PUT',['sync'=>['interval_minutes'=>120]]);$assert($r['status']===200 && $r['data']['account']['sync']['interval_minutes']===120,'API speichert Postfachintervall');
+    $r=$request('alice','/accounts/'.$account,'PUT',['sync'=>['interval_minutes'=>0]]);$assert($r['status']===200,'API kann Automatik wieder abschalten');
     $r=$request('bob','/accounts/'.$account);$assert($r['status']===404,'Fremden Account verweigern');
     [$map,$raw,$object]=$fixture($users['alice'],$account);
     $scope=$account.'~'.$map['INBOX'];

@@ -8,6 +8,8 @@ use MailMirror\Exception\ConfigurationException;
 
 final class AccountConfigValidator
 {
+    public const SYNC_INTERVALS = [0, 15, 30, 60, 120, 240, 360, 480, 720, 1440];
+
     public const PERFORMANCE_DEFAULTS = [
         'max_request_runtime_seconds' => 20,
         'max_index_entries_per_request' => 5000,
@@ -18,7 +20,7 @@ final class AccountConfigValidator
 
     public function normalize(array $input, ?string $immutableAccountId = null): array
     {
-        foreach (['imap','smtp','identities','performance'] as $key) {
+        foreach (['imap','smtp','identities','performance','sync'] as $key) {
             if (isset($input[$key]) && !is_array($input[$key])) throw new ConfigurationException("Ungültige {$key}-Konfiguration.");
         }
         foreach (['imap','smtp'] as $key) {
@@ -36,6 +38,10 @@ final class AccountConfigValidator
             ? $this->server($input['smtp'], true)
             : null;
         $identities = $this->identities($input['identities'] ?? []);
+        $syncInterval = $input['sync']['interval_minutes'] ?? 0;
+        if (!is_int($syncInterval) || !in_array($syncInterval, self::SYNC_INTERVALS, true)) {
+            throw new ConfigurationException('Ungültiges Sync-Intervall. Erlaubt sind manuell, 15/30 Minuten oder 1/2/4/6/8/12/24 Stunden.');
+        }
         $performance = self::PERFORMANCE_DEFAULTS;
         foreach ($performance as $key => $default) {
             $value = filter_var($input['performance'][$key] ?? $default, FILTER_VALIDATE_INT);
@@ -54,6 +60,7 @@ final class AccountConfigValidator
             'smtp' => $smtp,
             'identities' => $identities,
             'performance' => $performance,
+            'sync' => ['interval_minutes' => $syncInterval],
             'storage' => ['orphan_policy' => 'keep'],
         ];
     }

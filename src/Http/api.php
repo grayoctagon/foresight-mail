@@ -170,8 +170,14 @@ try {
             $respond(['ok' => true, 'recoverable' => true]);
         }
 
-        if (($segments[2] ?? null) === 'sync' && isset($segments[3])) {
+        if (($segments[2] ?? null) === 'sync' && count($segments) === 4) {
             $operation = $segments[3];
+            if ($method === 'POST' && $operation === 'check') {
+                session_write_close();
+                $result = $app['sync']->check($user->userId, $accountId);
+                header('Retry-After: '.$result['retryAfterSeconds']);
+                $respond($result);
+            }
             if ($method === 'POST' && $operation === 'start') {
                 session_write_close();
                 $respond(['job' => $app['sync']->start($user->userId, $accountId)]);

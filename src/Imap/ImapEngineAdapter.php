@@ -30,7 +30,9 @@ final class ImapEngineAdapter implements ImapAdapterInterface
         if ($this->connection?->connected()) {
             return;
         }
-        $this->connection = new ExtendedImapConnection(new ImapStream());
+        $stream = isset($this->config['_request_deadline'])
+            ? new DeadlineImapStream((float) $this->config['_request_deadline']) : new ImapStream();
+        $this->connection = new ExtendedImapConnection($stream);
         $encryption = match ($this->config['connection_security']) {
             'implicit_tls' => 'ssl',
             'starttls' => 'starttls',

@@ -3,10 +3,12 @@ import {$,$$,esc,toast} from './ui.js';
 import {state,savePreferences} from './state.js';
 import {setupMail,loadFolders,loadMessages,clearMail,renderTable,toggleColumnsMenu} from './mail.js';
 import {setupSettings,openSettings,clearSettings} from './settings.js';
-import {runSync} from './sync.js';
+import {runSync, startAutoSync, stopAutoSync} from './sync.js';
 
 let register=false;
 function loggedOut(message='') {
+    stopAutoSync();
+    state.syncing=false;$('#refreshBtn').disabled=false;
     clearSettings();
     state.stopSync=true;state.session=null;setCsrf(null);clearMail();state.accounts=[];state.folders=[];state.scopes=[];state.filters={};state.preferences=null;state.settingsSection=null;state.jobs.clear();
     $('#app').hidden=true;$('#authView').hidden=false;$('#settingsMain').innerHTML='';$('#mailboxes').innerHTML='';$('#favorites').innerHTML='';$('#syncBanner').hidden=true;
@@ -31,7 +33,7 @@ async function start() {
         state.session=session;setCsrf(session.csrf_token);
         state.preferences=await api('/webmail/settings');
         $('#authView').hidden=true;$('#app').hidden=false;$('#settingsPage').classList.remove('show');$('#workspace').hidden=false;$('#sessionUser').textContent=session.user.username;
-        await loadFolders();applyLayout();await loadMessages();
+        await loadFolders();applyLayout();await loadMessages();startAutoSync();
     } catch(error) {
         if(state.session?.authenticated){$('#authView').hidden=false;$('#app').hidden=true;$('#authView').innerHTML=`<section class="auth-card"><h1>foresight konnte nicht laden</h1><div class="form-message">${esc(error.message)}</div><button class="btn accent" id="retryStart">Erneut versuchen</button><button class="btn" id="retryLogout">Abmelden</button></section>`;$('#retryStart').onclick=start;$('#retryLogout').onclick=logout;}
         else renderAuth(error.message);

@@ -1,5 +1,15 @@
 # foresight
 
+## Aktueller Meilenstein: Postfachintervalle und sichere Sync-Steuerung
+
+- [x] Je Postfach manuelle bzw. automatische Intervalle (15/30 Minuten, 1/2/4/6/8/12/24 Stunden) speichern und unter Postfächer anbieten.
+- [x] Fälligkeit serverseitig prüfen; browsergesteuert alle 5 Minuten abfragen und laufende automatische Schritte nach 1 Minute fortsetzen.
+- [x] Laufende automatische Syncs unabhängig davon alle 5 Sekunden rein lesend abfragen – auch während eines Arbeitsrequests; Timer bei Abschluss/Abmeldung stoppen und getrennt testen.
+- [x] Jobstart, Zustandslesen und Sync-Schreibarbeit gemeinsam per nicht blockierendem Postfach-`flock` schützen; automatische Slots tabübergreifend reservieren.
+- [x] Kurze automatische Arbeitsschritte, absolute IMAP-I/O-Deadline und sichtbare Status-/Fehlerantworten ergänzen.
+- [x] API-, Scheduler-, Mehrprozess-/Mehrtab- und Browser-Regressionen abschließen.
+- [ ] Serverseitigen Cron-/Scheduler-Einstieg ergänzen, der gespeicherte Postfachintervalle ohne offenen Browser beachtet, dieselben Locks/Schritte nutzt und Fehler/Retry-Regeln berücksichtigt. Derzeit bewusst noch kein Cronjob eingerichtet.
+
 ## Aktueller Meilenstein: Sicherheit und Vorschau
 
 - [x] Dateibasierte Login-/Registrierungsdrosselung mit HTTP 429 und Regressionstests ergänzen.
