@@ -1,0 +1,11 @@
+{
+    "schema_version": 1,
+    "app": {
+        "session_name": "foresight_session",
+        "allow_registration": true
+    },
+    "paths": {
+        "mailstore_root": "../foresight-data/mailstore",
+        "secret_store_root": "../foresight-data/secrets"
+    }
+}

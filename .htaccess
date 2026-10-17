@@ -1,0 +1,9 @@
+Options -Indexes
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(?:config|src|vendor|tests|bin)(?:/|$) - [F,L,NC]
+    RewriteRule ^(?:composer\.(?:json|lock)|bootstrap\.php|README\.md|TODO\.md|INTEGRATION\.md)$ - [F,L,NC]
+</IfModule>
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>

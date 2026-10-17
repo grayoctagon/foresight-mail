@@ -1,0 +1,14 @@
+/config/deployment.json
+/config/deployment.php
+/vendor/
+/.env
+/.env.*
+!/.env.example
+/dist/
+/var/
+/storage/
+/mailstore/
+/secrets/
+/backups/
+/tests/screenshots/
+/.phpunit.result.cache

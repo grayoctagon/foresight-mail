@@ -1,0 +1,24 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+
+$public = realpath(dirname(__DIR__).'/public');
+$target = rtrim($argv[1] ?? '', '/');
+if ($public === false || $target === '' || $target[0] !== '/') {
+    fwrite(STDERR, "Verwendung: php bin/link-public /absoluter/webroot/anwendungsname\n");
+    exit(2);
+}
+if (is_link($target) && realpath($target) === $public) {
+    echo "Public-Symlink ist bereits korrekt: {$target}\n";
+    exit;
+}
+if (file_exists($target) || is_link($target)) {
+    fwrite(STDERR, "Ziel existiert bereits. Vorhandenen Ordner/Link zuerst separat sichern: {$target}\n");
+    exit(1);
+}
+if (!is_dir(dirname($target)) || !symlink($public, $target)) {
+    fwrite(STDERR, "Public-Symlink konnte nicht erstellt werden. Pfad und Rechte prüfen.\n");
+    exit(1);
+}
+echo "Public-Symlink erstellt: {$target} -> {$public}\n";

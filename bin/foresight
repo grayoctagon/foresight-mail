@@ -1,0 +1,45 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/** @var array<string,mixed> $app */
+$app = require dirname(__DIR__).'/bootstrap.php';
+
+$usage = static function (): never {
+    fwrite(STDERR, "foresight — Verwendung:\n  php bin/foresight sync-start <account-id>\n  php bin/foresight sync-step <account-id>\n  php bin/foresight sync-status <account-id>\n  php bin/foresight show-account <account-id>\n  php bin/foresight rebuild-metadata <account-id> <sha256>\n");
+    exit(2);
+};
+
+$findOwner = static function (string $accountId) use ($app): string {
+    foreach (glob($app['paths']->mailstoreRoot().'/users/*/accounts/'.$accountId.'/config.json') ?: [] as $path) {
+        $parts = explode('/', $path);
+        $userIndex = array_search('users', $parts, true);
+        if ($userIndex !== false && isset($parts[$userIndex + 1])) {
+            return $parts[$userIndex + 1];
+        }
+    }
+    throw new RuntimeException('Account-ID nicht gefunden.');
+};
+
+$command = $argv[1] ?? null;
+$accountId = $argv[2] ?? null;
+if (!is_string($command) || !is_string($accountId)) {
+    $usage();
+}
+
+try {
+    $userId = $findOwner($accountId);
+    $result = match ($command) {
+        'sync-start' => $app['sync']->start($userId, $accountId),
+        'sync-step' => $app['sync']->advance($userId, $accountId),
+        'sync-status' => $app['sync']->status($userId, $accountId),
+        'show-account' => $app['accounts']->get($userId, $accountId),
+        'rebuild-metadata' => isset($argv[3]) ? $app['objects']->rebuildMetadata($userId, $accountId, $argv[3]) : $usage(),
+        default => $usage(),
+    };
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n";
+} catch (Throwable $e) {
+    fwrite(STDERR, $e->getMessage()."\n");
+    exit(1);
+}

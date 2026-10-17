@@ -1,0 +1,21 @@
+{
+    "name": "local/foresight",
+    "description": "foresight: file-based webmail with resumable IMAP synchronization",
+    "type": "project",
+    "license": "CC-BY-SA-4.0",
+    "require": {
+        "php": "^8.3",
+        "directorytree/imapengine": "^1.13",
+        "ezyang/htmlpurifier": "^4.19",
+        "zbateson/mail-mime-parser": "^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "MailMirror\\": "src/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    }
+}
