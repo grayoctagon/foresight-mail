@@ -1,0 +1,74 @@
+// All writes are restricted to the dedicated synthetic PHP fixture.
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+(async()=>{
+    const endpoint=process.argv[2];
+    if(!endpoint || !/^http:\/\/127\.0\.0\.1:\d+(?:\/[A-Za-z0-9_-]+)*\/?$/.test(endpoint))throw new Error('Use the isolated PHP fixture URL.');
+    const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+    const page=await browser.newPage({viewport:{width:1440,height:1000}}), errors=[], external=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    await page.route('**/*',route=>{
+        const target=route.request().url();
+        if(!target.startsWith(endpoint)&&!target.startsWith('data:')){external.push(target);return route.abort();}
+        return route.continue();
+    });
+    const saved=()=>page.waitForResponse(r=>r.url().endsWith('/api.php/webmail/settings')&&r.request().method()==='PUT'&&r.status()===200);
+    const menu=async()=>{await page.locator('#previewRulesBtn').click();await page.locator('#previewRulesMenu').waitFor({state:'visible'});};
+    const toggle=async i=>{await menu();const response=saved();await page.locator('[data-preview-rule="'+i+'"]').click();await response;};
+    const open=async()=>{await page.locator('.folder-row').filter({hasText:'INBOX'}).click();await page.locator('tr.msg-row').nth(1).locator('.subject').click({position:{x:20,y:8}});await page.locator('#bodyBox pre, #htmlFrame').waitFor();};
+    try{
+        await page.goto(endpoint);
+        await page.getByLabel('Benutzername',{exact:true}).fill('alice');
+        await page.getByLabel('Passwort',{exact:true}).fill('fixture-password-1234');
+        await page.getByRole('button',{name:'Anmelden',exact:true}).click();
+        await page.locator('tr.msg-row').first().waitFor();
+        await page.evaluate(async()=>{const root=document.body.dataset.basePath;const {api}=await import(root+'/assets/js/api.js');await api('/webmail/settings',{method:'PUT',body:{previewMode:'text',previewRules:[]}});});
+        await page.reload();await page.locator('tr.msg-row').first().waitFor();
+        await open();assert.equal(await page.locator('#htmlFrame').count(),0);
+        assert.match(await page.locator('#bodyBox pre').textContent(),/Anhänge/);
+        await menu();assert.equal(await page.locator('[data-preview-rule]').count(),4);
+        assert.match(await page.locator('#previewRulesMenu').innerText(),/From.*gefälscht/s);
+        await page.keyboard.press('Escape');assert.equal(await page.locator('#previewRulesBtn').getAttribute('aria-expanded'),'false');
+        await toggle(0);await page.locator('#htmlFrame').waitFor();
+        await menu();assert(await page.locator('[data-preview-rule="0"]').isChecked());assert(!await page.locator('[data-preview-rule="1"]').isChecked());await page.locator('#previewRulesBtn').click();
+        await toggle(0);await page.locator('#bodyBox pre').waitFor();
+        await toggle(2);await page.locator('#htmlFrame').waitFor();
+        await toggle(1);await page.locator('#bodyBox pre').waitFor();
+        await menu();assert(await page.locator('[data-preview-rule="1"]').isChecked());assert(await page.locator('[data-preview-rule="2"]').isChecked());
+        await page.getByRole('menuitem',{name:'Details in Optionen',exact:true}).click();
+        await page.getByRole('heading',{name:'Nachrichtenvorschau',exact:true}).waitFor();
+        assert.equal(await page.locator('.preview-rule-row').count(),2);
+        assert.match(await page.locator('.preview-warning').innerText(),/gefälscht/);
+        await page.getByRole('button',{name:'← Zurück zum Postfach',exact:true}).click();await open();
+        await page.getByRole('button',{name:'HTML',exact:true}).click();await page.locator('#htmlFrame').waitFor();
+        await page.locator('tr.msg-row').nth(2).locator('.subject').click({position:{x:20,y:8}});await page.locator('#bodyBox pre').waitFor();
+        await page.reload();await page.locator('tr.msg-row').first().waitFor();await open();await page.locator('#bodyBox pre').waitFor();
+        await page.setViewportSize({width:390,height:844});await menu();
+        const rect=await page.locator('#previewRulesMenu').boundingBox();
+        assert(rect.x>=0&&rect.x+rect.width<=391,'Rule menu fits mobile viewport');
+        await page.getByRole('menuitem',{name:'Details in Optionen',exact:true}).click();
+        await page.setViewportSize({width:1440,height:1000});
+        const removed=saved();await page.getByRole('button',{name:'Ausnahme für joerg@example.test entfernen',exact:true}).click();await removed;
+        assert.equal(await page.locator('.preview-rule-row').count(),1);
+        const ruleChange=saved();await page.locator('[data-preview-mode]').selectOption('text');await ruleChange;
+        const deleted=saved();await page.locator('[data-preview-remove]').click();await deleted;
+        const defaults=saved();await page.getByLabel('Standardformat',{exact:true}).selectOption('html');await page.getByRole('button',{name:'Standard speichern',exact:true}).click();await defaults;
+        await page.getByLabel('Regeltyp',{exact:true}).selectOption('address');
+        await page.getByLabel('Absenderadresse oder @domain.at',{exact:true}).fill('JOERG@EXAMPLE.TEST');
+        await page.getByLabel('Immer anzeigen als',{exact:true}).selectOption('text');
+        const added=saved();await page.getByRole('button',{name:'Ausnahme speichern',exact:true}).click();await added;
+        assert.equal(await page.locator('.preview-rule-row').count(),1);
+        assert.match(await page.locator('.preview-rule-row').innerText(),/joerg@example.test/);
+        await page.getByRole('button',{name:'← Zurück zum Postfach',exact:true}).click();await open();await page.locator('#bodyBox pre').waitFor();
+        await toggle(0);await page.locator('#htmlFrame').waitFor();
+        await menu();assert(await page.locator('[data-preview-rule="0"]').isChecked());assert(!await page.locator('[data-preview-rule="1"]').isChecked());await page.locator('#previewRulesBtn').click();
+        await page.locator('#loadExternal').click();await page.locator('#htmlFrame').waitFor();
+        assert.deepEqual(external,[],'No remote image requests from browser, including explicit opt-in');
+        await page.locator('#appMenuBtn').click();await page.getByRole('button',{name:'Abmelden',exact:true}).click();
+        await page.getByLabel('Benutzername',{exact:true}).fill('bob');await page.getByLabel('Passwort',{exact:true}).fill('fixture-password-1234');await page.getByRole('button',{name:'Anmelden',exact:true}).click();
+        await page.locator('#settingsBtn').click();await page.locator('[data-settings-section="preview"]').click();
+        assert.equal(await page.getByLabel('Standardformat',{exact:true}).inputValue(),'text');assert.equal(await page.locator('.preview-rule-row').count(),0);
+        assert.deepEqual(errors,[]);
+        console.log('ok - Text default, four checked rule combinations, address precedence, persistence, manual override, mobile menu, direct settings link, rule CRUD, user isolation and no remote browser requests');
+    }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1);});

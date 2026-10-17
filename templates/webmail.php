@@ -43,7 +43,7 @@ header('Referrer-Policy: no-referrer');
  </main>
  <section class="settings-page" id="settingsPage"><aside class="settings-nav">
   <button class="btn small" id="backToMailBtn">← Zurück zum Postfach</button><h2>Einstellungen</h2>
-  <button class="nav-button" data-settings-section="mailboxes">Postfächer</button><button class="nav-button" data-settings-section="sync">Synchronisation</button><button class="nav-button" data-settings-section="performance">Ansicht &amp; Performance</button><button class="nav-button" data-settings-section="capabilities">Funktionsumfang</button>
+  <button class="nav-button" data-settings-section="mailboxes">Postfächer</button><button class="nav-button" data-settings-section="sync">Synchronisation</button><button class="nav-button" data-settings-section="preview">Nachrichtenvorschau</button><button class="nav-button" data-settings-section="performance">Ansicht &amp; Performance</button><button class="nav-button" data-settings-section="capabilities">Funktionsumfang</button>
   <div class="settings-divider"></div><div class="settings-mailboxes-title">Konfigurierte Postfächer</div><div id="settingsMailboxNav"></div><button class="btn small" id="addMailboxBtn">＋ Postfach hinzufügen</button>
  </aside><main class="settings-main" id="settingsMain"></main></section>
 </div>

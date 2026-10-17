@@ -1,6 +1,7 @@
 import {api} from './api.js';
 import {$, $$, esc, toast, confirmAction} from './ui.js';
-import {state, savePreferences} from './state.js';
+import {state, savePreferences, savePreviewPreferences} from './state.js';
+import {previewWarning, senderTargets} from './preview-rules.js';
 import {loadFolders, loadMessages, renderTable} from './mail.js';
 import {refreshJobs, renderJobs} from './sync.js';
 
@@ -28,6 +29,7 @@ export function renderSettings() {
     navigation();
     if(state.settingsSection==='sync'){renderJobs();refreshJobs();return;}
     if(state.settingsSection==='performance'){renderPreferences();return;}
+    if(state.settingsSection==='preview'){renderPreviewPreferences();return;}
     if(state.settingsSection==='capabilities') {
         $('#settingsMain').innerHTML='<h1>Funktionsumfang</h1><p class="settings-lead">Diese Anwendung liest die lokale, synchronisierte Kopie deiner IMAP-Postfächer.</p><div class="settings-card"><h2>Verfügbar</h2><p>Ordner, Nachrichten, HTML- und Plaintext-Vorschau, Anhänge, EML-Export, Suche in Headern und Vorschautext, Favoriten und schrittweiser Sync.</p><h2>Noch nicht unterstützt</h2><p>SMTP-Versand, IMAP-Änderungen an Flags, Verschieben und Löschen, Entwürfe sowie AI-Bewertungen und Meldedienste. Die entsprechenden Controls sind deaktiviert. SMTP und Absenderidentitäten lassen sich bereits konfigurieren.</p><h2>Datenschutz</h2><p>Passwörter verbleiben im geschützten Serverstore. Externe Bilder werden erst nach deiner Freigabe pro Nachricht geladen. E-Mail-Inhalte und Passwörter werden nicht im Browser-Storage gespeichert.</p></div>';
         return;
@@ -102,7 +104,40 @@ function renderPreferences() {
     $('#settingsMain').innerHTML=`<h1>Ansicht &amp; Performance</h1><p class="settings-lead">Die Mail-Liste lädt Zusammenfassungen seitenweise. Inhalte und Anhänge werden erst beim Öffnen abgerufen.</p><form id="preferencesForm"><div class="settings-card"><div class="settings-grid">${input('pageSize','Nachrichten pro API-Seite',state.preferences.pageSize,'number','min="10" max="200" required')}${select('density','Listendichte',state.preferences.density,[['comfortable','Komfortabel'],['compact','Kompakt']])}</div><p class="settings-note">Suche und Sortierung laufen serverseitig über alle ausgewählten lokalen Ordner. Der Suchindex wird bei Bedarf schrittweise aufgebaut. Es werden höchstens 110 Nachrichtenzeilen gleichzeitig dargestellt.</p><button class="btn accent">Speichern</button></div></form>`;
     $('#preferencesForm').onsubmit=async e=>{e.preventDefault();state.preferences.pageSize=Number($('[name="pageSize"]').value);state.preferences.density=$('[name="density"]').value;try{await savePreferences();renderTable();toast('Ansicht gespeichert.','success');}catch{}};
 }
+function renderPreviewPreferences() {
+    const prefs = state.preferences, rules = prefs.previewRules || [];
+    $('#settingsMain').innerHTML = `<h1>Nachrichtenvorschau</h1><p class="settings-lead">Standardformat und Ausnahmen gelten für alle eigenen Postfächer. Eine genaue Absenderadresse hat Vorrang vor einer genauen Domain, danach gilt der Standard. Domainregeln gelten nicht für Subdomains.</p>
+        <div class="settings-note settings-warning preview-warning" role="note">${esc(previewWarning)}</div><div id="previewSettingsError" class="form-message" role="alert" hidden></div>
+        <form id="previewDefaultForm" class="settings-card">${select('previewMode','Standardformat',prefs.previewMode || 'text',[['text','Text (Plaintext)'],['html','HTML']])}<p class="settings-note">HTML wird weiterhin bereinigt und isoliert dargestellt. Externe Bilder benötigen immer eine separate Freigabe pro Nachricht. Fehlt ein Plaintext-Teil, wird eine Textfassung aus dem bereinigten HTML erzeugt.</p><button class="btn accent">Standard speichern</button></form>
+        <section class="settings-card"><h2>Ausnahmen</h2><div class="preview-rule-list">${rules.map((r,i)=>`<div class="preview-rule-row"><div><strong>${esc(r.type==='domain'?'@'+r.value:r.value)}</strong><div class="settings-note">${r.type==='domain'?'Genaue Domain':'Genaue Absenderadresse'}</div></div><select data-preview-mode="${i}" aria-label="Format für ${esc(r.type==='domain'?'@'+r.value:r.value)}"><option value="text" ${r.mode==='text'?'selected':''}>Text</option><option value="html" ${r.mode==='html'?'selected':''}>HTML</option></select><button class="btn small danger" data-preview-remove="${i}" aria-label="Ausnahme für ${esc(r.value)} entfernen">Entfernen</button></div>`).join('') || '<p class="settings-note">Noch keine Ausnahmen gespeichert.</p>'}</div></section>
+        <form id="previewRuleForm" class="settings-card"><h2>Ausnahme hinzufügen</h2><div class="settings-grid">${select('previewRuleType','Regeltyp','address',[['address','Absenderadresse'],['domain','Domain']])}${input('previewRuleValue','Absenderadresse oder @domain.at','','text','required maxlength="254" autocomplete="off" placeholder="michael@domain.at oder @domain.at"')}${select('previewRuleMode','Immer anzeigen als','html',[['text','Text (Plaintext)'],['html','HTML']])}</div><p class="settings-note">Keine Platzhalter oder Teiltreffer. Eine bestehende Regel für dieselbe Adresse oder Domain wird ersetzt. Maximal 200 Ausnahmen.</p><button class="btn accent">Ausnahme speichern</button></form>`;
+    const save = async (mode, next) => {
+        const session = state.session, view = $('#previewDefaultForm');
+        $('#previewSettingsError').hidden = true;
+        $('#settingsMain').querySelectorAll('button,input,select').forEach(el=>el.disabled=true);
+        try {
+            await savePreviewPreferences(mode,next);
+            if (state.session !== session) return;
+            if (state.settingsSection === 'preview') renderPreviewPreferences();
+            toast('Vorschau-Einstellungen gespeichert.','success');
+        } catch (error) {
+            if (state.session !== session || view !== $('#previewDefaultForm')) return;
+            $('#previewSettingsError').textContent = error.message; $('#previewSettingsError').hidden = false;
+        } finally {
+            if (state.session === session && view === $('#previewDefaultForm')) $('#settingsMain').querySelectorAll('button,input,select').forEach(el=>el.disabled=false);
+        }
+    };
+    $('#previewDefaultForm').onsubmit = e=>{e.preventDefault();save($('[name="previewMode"]').value,rules);};
+    $('#previewRuleForm').onsubmit = e=>{
+        e.preventDefault();const type=$('[name="previewRuleType"]').value, raw=$('[name="previewRuleValue"]').value.trim().toLowerCase(), mode=$('[name="previewRuleMode"]').value;
+        const target=senderTargets(type==='domain'?'rule@'+raw.replace(/^@/,''):raw), value=target?.[type] || raw;
+        save(prefs.previewMode || 'text',[...rules.filter(r=>r.type!==type || r.value!==value),{type,value,mode}]);
+    };
+    $('#settingsMain').querySelectorAll('[data-preview-mode]').forEach(el=>el.onchange=()=>save(prefs.previewMode || 'text',rules.map((r,i)=>i===Number(el.dataset.previewMode)?{...r,mode:el.value}:r)));
+    $('#settingsMain').querySelectorAll('[data-preview-remove]').forEach(el=>el.onclick=()=>save(prefs.previewMode || 'text',rules.filter((_,i)=>i!==Number(el.dataset.previewRemove))));
+}
 export function setupSettings() {
+    window.addEventListener('open-preview-settings',()=>{openSettings('preview');$('#settingsMain').scrollTop=0;$('#settingsMain h1').setAttribute('tabindex','-1');$('#settingsMain h1').focus();});
     $('#settingsBtn').onclick=()=>openSettings();$('#backToMailBtn').onclick=closeSettings;
     $('.settings-nav').onclick=e=>{const section=e.target.closest('[data-settings-section]');if(section)openSettings(section.dataset.settingsSection);const account=e.target.closest('[data-settings-account]');if(account)openSettings('mailboxes',account.dataset.settingsAccount);};
     $('#addMailboxBtn').onclick=()=>{accountId='new';openSettings('mailboxes');};

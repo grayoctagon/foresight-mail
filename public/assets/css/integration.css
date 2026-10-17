@@ -57,6 +57,18 @@ input[type=password]{border:1px solid var(--grey-300);border-radius:var(--radius
 .identity-card{border:1px solid var(--grey-250);padding:14px;margin-top:12px}
 .identity-card .settings-actions{justify-content:space-between}
 .html-frame{height:65vh;min-height:300px}
+.preview-format-actions{justify-content:flex-start;gap:6px}
+.preview-rules-menu{position:fixed;left:0;right:auto;min-width:280px;width:min(430px,calc(100vw - 40px));max-height:65vh;overflow:auto;z-index:110}
+.preview-rule-option{display:flex;align-items:flex-start;gap:8px;padding:9px 10px;white-space:normal;overflow-wrap:anywhere;cursor:pointer}
+.preview-rule-option:hover{background:var(--grey-100)}
+.preview-rule-option input{flex:none;margin-top:3px}
+.preview-menu-warning,.preview-warning{white-space:normal;line-height:1.5;font-size:12px;overflow-wrap:anywhere}
+.preview-menu-warning{margin:8px 10px;color:var(--grey-700)}
+.preview-warning{padding:12px;border-left:3px solid var(--warning);background:#fff8e5;margin-bottom:16px}
+.preview-rule-row{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--grey-250);padding:12px 0}
+.preview-rule-row>div{flex:1;min-width:0;overflow-wrap:anywhere}
+.preview-rule-row select{max-width:100px}
+@media(max-width:800px){.preview-rule-row{flex-wrap:wrap}}
 .preview .mail-subject{overflow-wrap:anywhere}
 .meta-small,.address{overflow-wrap:anywhere}
 .attachment{max-width:100%;color:var(--grey-900);text-decoration:none}

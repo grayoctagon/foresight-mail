@@ -8,6 +8,7 @@ use MailMirror\Exception\CorruptStorageException;
 use MailMirror\Exception\IntegrityException;
 use MailMirror\Exception\NotFoundException;
 use MailMirror\Exception\BusyException;
+use MailMirror\Exception\RateLimitException;
 
 /** @var array<string,mixed> $app Loaded by public/api.php. */
 
@@ -70,14 +71,20 @@ try {
             throw new AuthorizationException('Registrierung ist deaktiviert.');
         }
         $input = $body();
-        $user = $app['auth']->register((string) ($input['username'] ?? ''), (string) ($input['password'] ?? ''));
+        if (!is_string($input['username'] ?? null) || !is_string($input['password'] ?? null) || strlen($input['username']) > 256 || strlen($input['password']) > 4096) throw new \InvalidArgumentException('Ungültige Anmeldedaten.');
+        $app['authLimiter']->consume('register', $_SERVER['REMOTE_ADDR'] ?? '', $input['username']);
+        $user = $app['auth']->register($input['username'], $input['password']);
         $app['auth']->establish($user);
         $respond(['ok' => true, 'user' => ['user_id' => $user->userId, 'username' => $user->username], 'csrf_token' => $app['auth']->csrf()], 201);
     }
 
     if ($method === 'POST' && $segments === ['login']) {
         $input = $body();
-        $user = $app['auth']->login((string) ($input['username'] ?? ''), (string) ($input['password'] ?? ''));
+        if (!is_string($input['username'] ?? null) || !is_string($input['password'] ?? null) || strlen($input['username']) > 256 || strlen($input['password']) > 4096) throw new \InvalidArgumentException('Ungültige Anmeldedaten.');
+        $remoteAddress = $_SERVER['REMOTE_ADDR'] ?? '';
+        $app['authLimiter']->consume('login', $remoteAddress, $input['username']);
+        $user = $app['auth']->login($input['username'], $input['password']);
+        $app['authLimiter']->successfulLogin($remoteAddress, $input['username']);
         $app['auth']->establish($user);
         $respond(['ok' => true, 'user' => ['user_id' => $user->userId, 'username' => $user->username], 'csrf_token' => $app['auth']->csrf()]);
     }
@@ -237,6 +244,9 @@ try {
     }
 
     throw new NotFoundException('API-Route nicht gefunden.');
+} catch (RateLimitException $e) {
+    header('Retry-After: '.$e->retryAfter);
+    $respond(['error' => ['code'=>'AUTH_RATE_LIMITED', 'message'=>$e->getMessage(), 'retryAfterSeconds'=>$e->retryAfter]], 429);
 } catch (AuthorizationException $e) {
     $respond(['error' => ['code' => 'unauthorized', 'message' => $e->getMessage()]], 401);
 } catch (NotFoundException $e) {

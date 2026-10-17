@@ -109,6 +109,10 @@ Ohne Composer auf dem Server können die Abhängigkeiten lokal unter einer passe
 
 HTTPS aktivieren. Registrierung nach Einrichtung nur bewusst freigeben. Produktionskonfiguration, Mailstore und Secrets separat sichern; ein Git-Repository ist kein Mail-Backup.
 
+Der Mailstore enthält zusätzlich `auth-limits/` für den Login-/Registrierungsschutz und muss auch bei der Anmeldung beschreibbar sein. Die Drosselung verwendet `REMOTE_ADDR`; hinter einem Reverse Proxy darf nur der vertrauenswürdige Webserver die Client-IP setzen. Ungeprüfte `X-Forwarded-For`-Header werden von der Anwendung nicht ausgewertet. HTTP 429 und `Retry-After` zeigen temporäre Limits an. Die Grenzwerte und verbleibende Schutzmaßnahmen sind in der [README](../README.md#sicherheitskonzept) beschrieben.
+
+Externe Bilder werden nur nach expliziter Freigabe über ausgehende HTTPS-Verbindungen des PHP-Prozesses geladen. Dafür werden DNS-Auflösung, TLS-Sockets und ein gültiger CA-Truststore benötigt, keine zusätzliche cURL-Erweiterung. Sind solche Verbindungen beim Hoster gesperrt oder schlägt die Sicherheitsprüfung fehl, bleiben die Bilder aus; die lokale Mailvorschau funktioniert weiterhin.
+
 ## 6. Git
 
 Versioniert werden Anwendungscode, öffentliche Quellen, Vorlagen, Tests, Dokumentation, `LICENSE.txt`, `composer.json` und `composer.lock`.

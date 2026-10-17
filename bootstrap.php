@@ -6,6 +6,7 @@ $projectRoot = __DIR__;
 require $projectRoot.'/vendor/autoload.php';
 
 use MailMirror\Auth\FileAuthProvider;
+use MailMirror\Auth\AuthRateLimiter;
 use MailMirror\Config\AccountConfigValidator;
 use MailMirror\Config\AccountRepository;
 use MailMirror\Config\CredentialStore;
@@ -37,6 +38,7 @@ $validator = new AccountConfigValidator();
 $credentials = new CredentialStore($paths, $json, $writer);
 $accounts = new AccountRepository($paths, $json, $writer, $validator);
 $auth = new FileAuthProvider($paths, $json, $writer);
+$authLimiter = new AuthRateLimiter($paths, $json, $writer);
 $catalog = new MailboxCatalog($paths, $ndjson, $writer);
 $folders = new FolderStore($paths, $json, $ndjson, $writer);
 $objects = new ContentObjectStore($paths, $json, $writer);
@@ -62,6 +64,6 @@ if (PHP_SAPI !== 'cli' && session_status() !== PHP_SESSION_ACTIVE) {
 
 return compact(
     'projectRoot', 'deployment', 'writer', 'paths', 'json', 'ndjson', 'validator',
-    'credentials', 'accounts', 'auth', 'catalog', 'folders', 'objects', 'emailIds',
+    'credentials', 'accounts', 'auth', 'authLimiter', 'catalog', 'folders', 'objects', 'emailIds',
     'jobs', 'imapFactory', 'logger', 'sync',
 );

@@ -20,6 +20,8 @@ final class SettingsStore
             'columnWidths' => [], 'favorites' => [],
         ]);
         $preferences['columnOrder'] = $this->columnOrder($preferences['columnOrder'] ?? []);
+        $preferences['previewMode'] = $this->previewMode($preferences['previewMode'] ?? 'text');
+        $preferences['previewRules'] = $this->previewRules($preferences['previewRules'] ?? []);
         return $preferences;
     }
 
@@ -33,7 +35,12 @@ final class SettingsStore
             $out[$key] = $key === 'pageSize' ? (int) $value : (float) $value;
         }
         if ($out['sidebarPercent'] + $out['listPercent'] > 95) throw new \InvalidArgumentException('Die Vorschau benötigt mindestens 5 % Breite.');
-        $out['density'] = ($input['density'] ?? '') === 'compact' ? 'compact' : 'comfortable';
+        $out['density'] = ($input['density'] ?? $existing['density']) === 'compact' ? 'compact' : 'comfortable';
+        foreach (['columns','favorites','columnWidths'] as $key) {
+            if (!array_key_exists($key, $input)) $input[$key] = $existing[$key];
+        }
+        $out['previewMode'] = $this->previewMode(array_key_exists('previewMode', $input) ? $input['previewMode'] : $existing['previewMode']);
+        $out['previewRules'] = $this->previewRules(array_key_exists('previewRules', $input) ? $input['previewRules'] : $existing['previewRules']);
         $columns = self::COLUMNS;
         if (!is_array($input['columns'] ?? []) || !is_array($input['favorites'] ?? []) || !is_array($input['columnWidths'] ?? [])) throw new \InvalidArgumentException('Ungültige Einstellungen.');
         foreach ($input['columns'] ?? [] as $column) {
@@ -61,6 +68,36 @@ final class SettingsStore
             $out['favorites'][] = ['name' => mb_substr($favorite['name'], 0, 100), 'folders' => array_values(array_unique($folders)), 'filters' => $filters];
         }
         $this->json->write($this->paths->user($user).'/webmail-settings.json', $out);
+        return $out;
+    }
+
+    private function previewMode(mixed $mode): string
+    {
+        if (!in_array($mode, ['text', 'html'], true)) throw new \InvalidArgumentException('Vorschauformat muss text oder html sein.');
+        return $mode;
+    }
+
+    private function previewRules(mixed $rules): array
+    {
+        if (!is_array($rules) || !array_is_list($rules) || count($rules) > 200) throw new \InvalidArgumentException('Höchstens 200 Vorschau-Ausnahmen sind erlaubt.');
+        $out = []; $seen = [];
+        foreach ($rules as $rule) {
+            if (!is_array($rule) || !in_array($rule['type'] ?? null, ['address','domain'], true) || !is_string($rule['value'] ?? null)) throw new \InvalidArgumentException('Ungültige Vorschau-Ausnahme.');
+            $type = $rule['type'];
+            $value = strtolower(trim($rule['value']));
+            if ($type === 'domain' && str_starts_with($value, '@')) $value = substr($value, 1);
+            $at = strrpos($value, '@');
+            $domain = $type === 'domain' ? $value : ($at === false ? '' : substr($value, $at + 1));
+            if (function_exists('idn_to_ascii') && $domain !== '') $domain = idn_to_ascii($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) ?: '';
+            $domain = strtolower($domain);
+            if (strlen($domain) > 253 || !preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/D', $domain)) throw new \InvalidArgumentException('Bitte eine vollständige Mailadresse oder Domain wie @domain.at angeben.');
+            $value = $type === 'domain' ? $domain : substr($value, 0, $at).'@'.$domain;
+            if ($type === 'address' && (strlen($value) > 254 || !filter_var($value, FILTER_VALIDATE_EMAIL))) throw new \InvalidArgumentException('Ungültige Absenderadresse.');
+            $key = $type.':'.$value;
+            if (isset($seen[$key])) throw new \InvalidArgumentException('Für diese Adresse oder Domain besteht bereits eine Vorschau-Ausnahme.');
+            $seen[$key] = true;
+            $out[] = ['type' => $type, 'value' => $value, 'mode' => $this->previewMode($rule['mode'] ?? null)];
+        }
         return $out;
     }
 

@@ -104,9 +104,19 @@ final class MimeReader
             $inline[trim($cid, '<>')] = 'data:'.$info['mime'].';base64,'.base64_encode($bytes);
             if ($budget <= 0) break;
         }
+        $safeHtml = $html === '' ? null : $this->sanitizer->sanitize($html, $inline, $external);
+        $textDerivedFromHtml = $text === '' && $safeHtml !== null;
+        if ($textDerivedFromHtml) {
+            $plain = preg_replace('~<head\b[^>]*>.*?</head>~si', '', $safeHtml) ?? '';
+            $plain = preg_replace('~<(?:br\b[^>]*|/(?:p|div|li|tr|h[1-6]))>~i', "\n", $plain) ?? '';
+            $text = trim(html_entity_decode(strip_tags($plain), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if (strlen($text) > self::BODY_LIMIT) { $text = mb_strcut($text, 0, self::BODY_LIMIT, 'UTF-8'); $textTruncated = true; }
+        }
         return [
             'text' => $text,
-            'html' => $html === '' ? null : $this->sanitizer->sanitize($html, $inline, $external),
+            'html' => $safeHtml,
+            'textDerivedFromHtml' => $textDerivedFromHtml,
+            'externalImages' => $this->sanitizer->externalStats(),
             'externalAllowed' => $external,
             'truncated' => $textTruncated || $htmlTruncated,
             'limitBytes' => self::BODY_LIMIT,

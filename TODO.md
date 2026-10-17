@@ -1,5 +1,13 @@
 # foresight
 
+## Aktueller Meilenstein: Sicherheit und Vorschau
+
+- [x] Dateibasierte Login-/Registrierungsdrosselung mit HTTP 429 und Regressionstests ergänzen.
+- [x] Externe Bilder nur kontrolliert und nach ausdrücklicher Freigabe laden; interne Ziele und Weiterleitungen sperren.
+- [x] Automatische PHP- und Browser-Tests für Pushes und Pull Requests einrichten.
+- [x] Text als Vorschau-Standard, benutzerbezogene Adress-/Domainausnahmen, Regelverwaltung und ⋮-Schnellmenü ergänzen.
+- [x] Fälschbare From-Adressen, Regelpriorität und verbleibende Sicherheitsgrenzen dokumentieren und testen.
+
 - [x] Git-taugliche Projektstruktur mit öffentlicher `public/`-Grenze, zentraler relativer Pfadzeile, relativen Datenpfaden, automatischem URL-Unterordner und lokalem Public-Symlink einrichten.
 - [x] Anwendung, Login, CLI und Dokumentation auf foresight umstellen.
 
@@ -40,8 +48,8 @@ Die bestehende V1 ist ein read-only IMAP-Mirror. Versand, serverseitige Flagänd
 
 ## Technische Folgearbeiten außerhalb der abgeschlossenen Leseintegration
 
-- [ ] Öffentlichen Betrieb zusätzlich mit Login-Rate-Limits/Zugriffsschutz absichern; eingebaute Drosselung/MFA bei Bedarf ergänzen.
-- [ ] Restriktiveren Schutz bei Freigabe externer Bilder evaluieren; derzeit gibt es keinen eigenen Host-/Netzwerkfilter gegen lokale oder private Bildziele.
+- [ ] Öffentlichen Betrieb zusätzlich mit vorgelagertem Zugriffsschutz gegen verteilte Angriffe absichern; MFA bei Bedarf ergänzen. Die dateibasierte Login-Drosselung ist vorhanden.
+- [ ] Bildfreigabe bei Bedarf um zusätzliche Datenschutzregeln erweitern; öffentliche HTTPS-Rasterbilder werden bereits mit DNS-/IP-Pinning, ohne Redirects und mit Mengen-/Bytegrenzen serverseitig eingebettet.
 - [ ] Bei deutlich größeren Beständen einen partitionierten Suchindex evaluieren; die aktuelle speicherschonende Seitenauswahl scannt den lokalen Summary-Index.
 - [ ] Optional vollständige Body-Suche ergänzen; derzeit werden Header und Snippets durchsucht.
 - [ ] IMAP-Schreibaktionen und serverseitige Entwürfe als eigene, separat getestete Erweiterungen umsetzen.

@@ -41,8 +41,8 @@ $assert = static function (bool $value, string $label) use (&$passed): void {
     ++$passed; echo 'ok - '.$label."\n";
 };
 $clients = ['alice' => ['cookie'=>'','csrf'=>''], 'bob' => ['cookie'=>'','csrf'=>''], 'anon' => ['cookie'=>'','csrf'=>'']];
-$request = static function (string $client, string $path, string $method = 'GET', mixed $body = null, bool $csrf = true) use ($address, $mount, &$clients): array {
-    $headers = ['Accept: application/json','Cookie: '.$clients[$client]['cookie']];
+$request = static function (string $client, string $path, string $method = 'GET', mixed $body = null, bool $csrf = true, array $extraHeaders = []) use ($address, $mount, &$clients): array {
+    $headers = array_merge(['Accept: application/json','Cookie: '.$clients[$client]['cookie']], $extraHeaders);
     if ($csrf) $headers[] = 'X-CSRF-Token: '.$clients[$client]['csrf'];
     if ($body !== null) $headers[] = 'Content-Type: application/json';
     $context = stream_context_create(['http'=>['method'=>$method,'header'=>implode("\r\n",$headers),
@@ -189,7 +189,7 @@ try {
     $assert(!str_contains($html,'tracking.example.test'),'Externe Bilder standardmäßig blockiert');
     $assert(str_contains($html,'data:image/png;base64,'),'CID-Bild als verifizierte Rastergrafik eingebettet');
     $assert(str_contains($html,'Content-Security-Policy'),'Zusätzliche CSP im Maildokument');
-    $r=$request('alice',$messageRoute.'/body?external=1');$assert(str_contains($r['data']['html'],'tracking.example.test'),'Externe Bilder nur nach ausdrücklichem Abruf');
+    $r=$request('alice',$messageRoute.'/body?external=1');$assert($r['data']['externalAllowed'] && !str_contains($r['data']['html'],'tracking.example.test') && $r['data']['externalImages']['blocked']===1,'Externe Bilder nur kontrolliert: reservierte Domain bleibt auch nach Freigabe blockiert');
     $r=$request('alice',$messageRoute.'/attachments/a0');
     $assert($r['raw']==="attachment\0bytes\r\n",'Anhang wird bytegetreu dekodiert');
     $assert(str_contains(strtolower(implode("\n",$r['headers'])),'content-type: application/octet-stream'),'Anhänge ausschließlich als Download mit sicherem MIME-Typ');
@@ -205,6 +205,20 @@ try {
         $r=$request('alice','/webmail/settings','PUT',$invalid);
         $assert($r['status']===422 && $r['json']['ok']===false,'Ungültige Anzeigeeinstellungen abgewiesen');
     }
+    $r=$request('alice','/webmail/settings');
+    $assert($r['data']['previewMode']==='text' && $r['data']['previewRules']===[],'Vorschau verwendet sicheren Textstandard ohne bestehende Regeln');
+    $previewRules=[['type'=>'domain','value'=>'@EXAMPLE.AT','mode'=>'html'],['type'=>'address','value'=>'Michael@Example.at','mode'=>'text']];
+    $r=$request('alice','/webmail/settings','PUT',['previewMode'=>'html','previewRules'=>$previewRules]);
+    $assert($r['status']===200 && $r['data']['previewRules'][0]['value']==='example.at' && $r['data']['previewRules'][1]['value']==='michael@example.at','Vorschauformat und normalisierte Adress-/Domainausnahmen speichern');
+    $r=$request('alice','/webmail/settings','PUT',['pageSize'=>55]);
+    $assert($r['data']['previewMode']==='html' && count($r['data']['previewRules'])===2,'Andere Einstellungen erhalten die Vorschau-Ausnahmen');
+    $r=$request('bob','/webmail/settings');
+    $assert($r['data']['previewMode']==='text' && $r['data']['previewRules']===[],'Vorschau-Ausnahmen sind benutzergetrennt');
+    foreach([['previewMode'=>'auto'],['previewMode'=>null],['previewRules'=>null],['previewRules'=>'bad'],['previewRules'=>[['type'=>'domain','value'=>'example.at.evil/path','mode'=>'html']]],['previewRules'=>[['type'=>'address','value'=>'<script>@example.at','mode'=>'html']]],['previewRules'=>[['type'=>'domain','value'=>'example.at','mode'=>'html'],['type'=>'domain','value'=>'@EXAMPLE.AT','mode'=>'text']]]] as $invalid) {
+        $r=$request('alice','/webmail/settings','PUT',$invalid);$assert($r['status']===422,'Ungültige oder widersprüchliche Vorschau-Regeln abgewiesen');
+    }
+    $r=$request('alice','/webmail/settings');$assert(count($r['data']['previewRules'])===2,'Ungültige Requests verändern gespeicherte Vorschau-Regeln nicht');
+    $request('alice','/webmail/settings','PUT',['previewMode'=>'text','previewRules'=>[]]);
     $r=$request('alice','/webmail/settings','PUT',['pageSize'=>40,'density'=>'compact','favorites'=>[['name'=>'Mein Eingang','folders'=>[$scope],'filters'=>['q'=>'Jörg']]]]);
     $assert($r['status']===200 && $r['data']['pageSize']===40,'Benutzerpräferenzen und Favorit speichern');
     $originalPreferences=$r['data'];
@@ -248,6 +262,16 @@ try {
     $r=$request('alice','/session');$assert($r['data']['authenticated']===false,'Session nach Logout ungültig');
     $r=$request('alice','/login','POST',['username'=>'alice','password'=>'bad-password']);$assert($r['status']===401,'Falsches Login abgewiesen');
     $r=$request('alice','/login','POST',['username'=>'alice','password'=>'fixture-password-1234']);$assert($r['status']===200,'Bestehendes Login wiederverwendet');
+    for($i=0;$i<5;$i++) {$r=$request('anon','/login','POST',['username'=>'rate-limit-fixture','password'=>'bad-password']);$assert($r['status']===401,'Loginversuch vor Drosselgrenze');}
+    $r=$request('anon','/login','POST',['username'=>'RATE-LIMIT-FIXTURE','password'=>'bad-password']);
+    $assert($r['status']===429 && $r['json']['error']['code']==='AUTH_RATE_LIMITED' && str_contains(implode("\n",$r['headers']),'Retry-After:'),'Login-Drosselung liefert 429 und Retry-After, unabhängig von Großschreibung');
+    $clients['fresh']=['cookie'=>'','csrf'=>''];$r=$request('fresh','/login','POST',['username'=>'rate-limit-fixture','password'=>'bad-password']);
+    $assert($r['status']===429,'Neue Session umgeht Login-Drosselung nicht');
+    $r=$request('fresh','/login','POST',['username'=>'rate-limit-fixture','password'=>'bad-password'],true,['X-Forwarded-For: 198.51.100.123','X-Real-IP: 198.51.100.124']);
+    $assert($r['status']===429,'Ungeprüfte Proxy-Header können die Client-IP-Drosselung nicht umgehen');
+    for($i=0;$i<3;$i++) {$r=$request('fresh','/register','POST',['username'=>'signup-limit-fixture','password'=>'short']);$assert($r['status']===401,'Ungültige Registrierung zählt zum separaten IP-Limit');}
+    $r=$request('fresh','/register','POST',['username'=>'signup-limit-fixture','password'=>'fixture-password-1234']);
+    $assert($r['status']===429 && $r['json']['error']['code']==='AUTH_RATE_LIMITED','Registrierungsdrosselung liefert ebenfalls HTTP 429');
     $start=microtime(true);
     $r=$waitForPage($account.'~'.$map['Large']);
     $assert($r['status']===200 && $r['data']['total']===50000 && count($r['data']['messages'])===100,'50.000 Nachrichten ohne Volltransfer oder Body-Laden');

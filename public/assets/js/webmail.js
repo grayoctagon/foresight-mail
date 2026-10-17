@@ -70,9 +70,9 @@ function setupLayout() {
 setupMail();setupSettings();setupLayout();
 document.addEventListener('click',e=>{
     const close=e.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
-    if(!e.target.closest('.menu-wrap'))$$('.menu.show').forEach(el=>el.classList.remove('show'));
+    if(!e.target.closest('.menu-wrap')){$$('.menu.show').forEach(el=>el.classList.remove('show'));$('#previewRulesBtn')?.setAttribute('aria-expanded','false');}
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape')$$('.menu.show').forEach(el=>el.classList.remove('show'));});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){const previewOpen=$('#previewRulesMenu')?.classList.contains('show');$$('.menu.show').forEach(el=>el.classList.remove('show'));$('#previewRulesBtn')?.setAttribute('aria-expanded','false');if(previewOpen)$('#previewRulesBtn')?.focus();}});
 $('#appMenuBtn').onclick=()=>$('#appMenu').classList.toggle('show');
 $('#appMenu').onclick=e=>{
     const action=e.target.closest('[data-action]')?.dataset.action;if(!action)return;$('#appMenu').classList.remove('show');

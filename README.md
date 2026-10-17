@@ -65,6 +65,7 @@ foresight/                              Projektverzeichnis
   bin/foresight, bin/mailmirror        Sync-CLI und kompatibler bisheriger Einstieg
   bin/link-public                     lokaler Symlink, kein Kopieren der Assets
   docs/deployment.md                   Installation, Git und Hosting
+  .github/workflows/tests.yml          automatische PHP- und Browser-Tests
   tests/                              Backend-, API-, Pfad- und Browserprüfungen
   composer.json, composer.lock
   vendor/                             Composer-Abhängigkeiten, nicht im Git
@@ -88,6 +89,7 @@ foresight-data/                        außerhalb des Repository und Webroots
         {sha256}.json                 Mirror-Metadaten
         {sha256}.webmail.json         rekonstruierbare MIME-Summary
     archive/accounts/                 wiederherstellbar archivierte Accounts
+  mailstore/auth-limits/               begrenzter Drosselspeicher und Prozess-Lock
   secrets/{user}/{account}/{ref}.json  geschützte Passwörter
 ```
 
@@ -122,6 +124,16 @@ Die Einstellung `columnOrder` enthält die Reihenfolge aller Spalten, getrennt v
 Die Liste lädt 10-200 Summaries pro Seite (Standard 100), lädt beim Scrollen nach und rendert höchstens 110 Nachrichtenzeilen gleichzeitig. Sortierung und Filterung erfolgen serverseitig vor der Pagination, auch über mehrere Ordner. Die Suche umfasst dekodierte Absender, Empfänger, Betreff und Vorschautext; sie ist **keine vollständige Body-Volltextsuche**. Datums-, Prioritäts-, Ungelesen-, Markiert-, Anhang- und Unbeantwortet-Filter sind verfügbar. Nachrichten können mit Pfeiltasten geöffnet werden; `/` fokussiert die Suche.
 
 Nachrichtendetails, Body, Anhänge und Raw-EML haben getrennte Abrufe. HTML und Plaintext können umgeschaltet werden. Pending-Nachrichten werden als noch nicht lokal verfügbar angezeigt. Kleinere Bildschirme wechseln zwischen Liste und Vorschau.
+
+### Nachrichtenvorschau und Ausnahmen
+
+Unter **Einstellungen → Nachrichtenvorschau** wird das Standardformat gewählt: **Text** (auch für bestehende Benutzer ohne entsprechende Einstellung) oder HTML. HTML-only-Mails erhalten für den Textmodus eine Textfassung aus dem bereinigten HTML. Fehlt ein HTML-Teil, wird immer Text verwendet.
+
+Ausnahmen werden in einer benutzerbezogenen Liste verwaltet: genaue Absenderadresse wie `michael@domain.at` oder genaue Domain wie `@domain.at`, jeweils mit Text oder HTML. Eine genaue Adresse hat Vorrang vor der Domain, danach gilt der Standard. Domainregeln erfassen keine Subdomains oder ähnlich aussehenden Domains. Adressen werden ohne Beachtung der Groß-/Kleinschreibung verglichen, internationale Domains in ASCII/IDN-Schreibweise normalisiert. Maximal 200 eindeutige Ausnahmen sind erlaubt; Formatänderungen und Entfernen sind direkt in der Liste möglich.
+
+Neben HTML und Plaintext öffnet **⋮** vier Schnelloptionen für die aktuelle Nachricht: Adresse/Domain jeweils immer als HTML oder Text. Checkboxen zeigen exakt vorhandene Regeln, nicht nur das durch eine übergeordnete Regel wirksame Format. Aktivieren ersetzt eine entgegengesetzte Regel für dasselbe Ziel; Deaktivieren entfernt diese Regel. „Details in Optionen“ öffnet unmittelbar die Vorschau-Einstellungen. Ein normaler Klick auf HTML/Plaintext ändert nur die aktuell geöffnete Nachricht.
+
+**Wichtig:** Die From-Adresse einer Mail kann gefälscht sein. Diese Regeln sind reine Anzeigepräferenzen und kein Vertrauensnachweis. Der Hinweis steht sowohl in den Einstellungen als auch im Schnellmenü. Auch eine HTML-Ausnahme deaktiviert weder HTML-Bereinigung und Sandbox noch die separate Freigabe externer Bilder.
 
 Postfacheinstellungen integrieren IMAP, vorbereitetes SMTP, Send-as-/Alias-Identitäten, Envelope-From, Reply-To, Signaturen/Signatur-Platzierung und Sync-Limits. Leere Passwortfelder erhalten vorhandene Credentials; fehlende Credentials werden ausdrücklich angezeigt. Ein neuer Account wird erst nach erfolgreichem Credential-Speichern veröffentlicht. Ungültige Einstellungen verändern keine Passwörter.
 
@@ -163,9 +175,11 @@ Listenparameter: `folders=account~folder,account~folder` (max. 128 Ordner), `lim
 
 Eine Summary enthält `id`, `accountId`, `folderId`, `subject`, `from:{name,email}`, `to`, `cc`, `date`, `snippet`, `flags`, `hasAttachments`, `attachmentCount`, `bytes` und `contentState`. Antworten liefern `total` und `nextCursor`. Cursor gelten für die jeweilige Filter-/Sortierauswahl und Indexgeneration. Ändert ein Sync die Quellen, liefert ein alter Cursor HTTP 409; die UI lädt die Liste neu.
 
+Vorschaupräferenzen werden ebenfalls über `/webmail/settings` gelesen und geschrieben: `previewMode` ist `text` oder `html`, `previewRules` ist eine Liste von `{type:"address"|"domain", value:"…", mode:"text"|"html"}`. Domainwerte werden ohne führendes `@` gespeichert. Teilupdates erhalten nicht mitgesendete Präferenzen. Body-Antworten enthalten zusätzlich `textDerivedFromHtml` sowie `externalImages:{loaded,blocked}`.
+
 Beim ersten Abruf kann `indexing` eine Liste laufender lokaler Indexaufbauten enthalten. Die UI wiederholt den GET schrittweise. Es werden keine unvollständig sortierten Teilresultate als fertige Liste ausgegeben.
 
-HTTP-Status: 200/201 Erfolg, 401 fehlende Anmeldung/ungültiges CSRF-Token, 404 nicht gefunden oder fremde Ressource, 405 nicht unterstützte Schreibmethode unter `/webmail`, 409 geänderte Indexgeneration oder laufender lokaler Ordner-Commit, 422 ungültige Eingaben, 500 Server-/Speicherfehler. Ältere Routen können bei einer nicht unterstützten Methode 404 statt 405 liefern. Authentifizierung und CSRF-Prüfung finden gegebenenfalls vor der Methodenauswertung statt.
+HTTP-Status: 200/201 Erfolg, 401 fehlende Anmeldung/ungültiges CSRF-Token, 404 nicht gefunden oder fremde Ressource, 405 nicht unterstützte Schreibmethode unter `/webmail`, 409 geänderte Indexgeneration oder laufender lokaler Ordner-Commit, 422 ungültige Eingaben, 429 Anmeldedrosselung mit `Retry-After`, 500 Server-/Speicherfehler. Ältere Routen können bei einer nicht unterstützten Methode 404 statt 405 liefern. Authentifizierung und CSRF-Prüfung finden gegebenenfalls vor der Methodenauswertung statt.
 
 ## Lokaler Suchindex und Performance
 
@@ -235,13 +249,14 @@ Backups umfassen lokale Konfiguration, Mailstore und Secrets getrennt vom Git-Re
 
 - Serverseitige Ownership-Prüfung vor Account-, Ordner-, Message-, Body-, Anhang- und Raw-Zugriff. Fremde Ressourcen liefern 404; clientseitige User-IDs werden nicht akzeptiert.
 - Sessions verwenden ID-Regeneration beim Login, Strict Mode, HttpOnly und SameSite=Strict; Secure-Cookies unter HTTPS.
+- Dateibasierte Drosselung vor der Passwortprüfung: je 15-Minuten-Fenster maximal fünf Loginversuche pro Benutzername/IP, 40 Loginversuche pro IP und fünf Registrierungsversuche pro IP. Erfolgreiche Logins setzen nur das Benutzer-/IP-Limit zurück. Prozess-Locks reservieren Versuche vor der Prüfung; neue Sessions umgehen das Limit nicht. HTTP 429 liefert `AUTH_RATE_LIMITED` und `Retry-After`. Der private Speicher enthält nur gehashte Bucket-Schlüssel, Zähler und Ablaufzeiten, höchstens 4096 Buckets; bei voller Kapazität werden neue Buckets bis zum Ablauf abgewiesen. Ein nicht verfügbarer Drosselspeicher erlaubt keinen ungeschützten Login.
 - Authentifizierte Schreibzugriffe einschließlich Logout benötigen `X-CSRF-Token`. Login und Registrierung sind vor der Anmeldung ohne CSRF-Token möglich. Für schreibende Requests werden zusätzlich JSON-Content-Type, die Host-/Port-Übereinstimmung eines vorhandenen Origin-Headers und die Requestgröße geprüft; ein Origin-Header ist nicht zwingend erforderlich.
 - Technische IDs werden validiert; Remote-Mailboxnamen oder Attachmentnamen bestimmen keine lokalen Pfade.
 - Account-Konfiguration und API-Antworten enthalten keine IMAP-/SMTP-Passwörter. Neue Passwortwerte werden nur zum Speichern übertragen; die API liefert nur Credential-Status.
 - Keine Bodies, EMLs oder Credentials in regulären App-Logs. Externe Bibliotheksfehler werden für Sync/API auf sichere Meldungen reduziert.
 - Mail-HTML wird mit [HTML Purifier](https://github.com/ezyang/htmlpurifier) und einer engen Allowlist bereinigt; Skripte, Eventhandler, Formulare, SVG, Frames und gefährliche URLs werden entfernt. Die konkrete HTML-/CSS-/URI-Konfiguration einschließlich Ressourcenfilter steht in [src/Webmail/HtmlSanitizer.php](src/Webmail/HtmlSanitizer.php).
-- Darstellung ausschließlich im sandboxed iframe ohne Scripts und ohne same-origin-Freigabe, mit zusätzlicher CSP und No-Referrer. Externe Bilder bleiben blockiert, bis der Benutzer sie pro Nachricht erlaubt. Die Freigabe kann Tracking beim Bildhost auslösen.
-- CID-Inhalte werden nur als überprüfte PNG/JPEG/GIF/WebP-Bytes eingebettet. Ohne externe Freigabe werden andere Bild-URLs entfernt. Nach der Freigabe sind HTTP(S)-Bildadressen erlaubt, auch solche zu lokalen oder privaten Netzwerkzielen. Ein eigener Host-/Netzwerkfilter oder Bildproxy ist nicht implementiert; der Browser kann solche Adressen im Rahmen seiner eigenen Sicherheitsregeln anfragen.
+- Darstellung ausschließlich im sandboxed iframe ohne Scripts und ohne same-origin-Freigabe, mit zusätzlicher CSP und No-Referrer. Text ist der Standard. Externe Bilder bleiben unabhängig von Vorschau-Ausnahmen blockiert, bis der Benutzer sie pro Nachricht erlaubt. Die Freigabe kann Tracking beim Bildhost auslösen, wobei der Bildhost die Serververbindung statt eines direkten Browserabrufs sieht.
+- CID-Inhalte werden nur als überprüfte PNG/JPEG/GIF/WebP-Bytes eingebettet. Nach ausdrücklicher Freigabe lädt [src/Webmail/ExternalImageLoader.php](src/Webmail/ExternalImageLoader.php) höchstens vier öffentliche HTTPS-Bild-URLs auf Port 443. Alle aufgelösten Adressen müssen öffentlich sein; die Verbindung verwendet eine fest gepinnte geprüfte IP und TLS-Prüfung für den ursprünglichen Host. Private, reservierte und Übergangsnetz-Ziele, die eigene Hostadresse, URL-Credentials, HTTP und Weiterleitungen werden abgewiesen. Es werden keine Browser-Cookies, Zugangsdaten oder Referrer weitergereicht. Nur geprüfte Rasterbilder mit maximal 512 KiB/16 Megapixeln werden eingebettet; Downloads insgesamt höchstens 2 MiB, weiches Zeitbudget acht Sekunden (DNS-/Systemtimeouts können länger dauern). Das fertige Maildokument erlaubt mit `img-src data:` auch nach Freigabe keine direkten Netzwerkbilder. Ein zusätzliches Einbettungsbudget von 4 MiB verhindert eine Vervielfachung großer CID-/Remote-Bilder.
 - Anhänge werden unabhängig vom behaupteten MIME-Typ als `application/octet-stream` mit Attachment-Disposition, bereinigtem Namen, NoSniff und Sandbox ausgeliefert.
 - UI-Ausgaben werden escaped. Mails und Credentials gelangen nicht in Browser-Storage; Benutzerwechsel verwirft laufende Mailabrufe und Inhalte.
 - Wartende Präferenzänderungen und verspätete Fehlerantworten sind an die ursprüngliche Sitzung gebunden und können die nachfolgende Sitzung nicht verändern.
@@ -254,42 +269,38 @@ Der Secret Store enthält entsprechend der bestehenden V1 Klartext-Passwörter m
 php tests/run.php
 php tests/imapengine-integration.php
 php tests/deployment.php
+php tests/security.php
 php tests/webmail.php
 php tests/webmail.php --mount=/mail
 php tests/webmail.php --mount=/foresight-mail
 php tests/webmail.php --mount=/nested/other
 ```
 
-Die bestehenden Suites prüfen 43 Mirror-/Storage-Fälle und sieben ImapEngine-Protokollfälle, einschließlich Recovery, Locks, 50.000 Locations und bytegetreuen 100-MB-EMLs. `tests/deployment.php` ergänzt 26 Prüfungen zu relativen Datenpfaden, Konfigurations-Overrides, Schutz gegen Speicherung in öffentlichen Verzeichnissen oder über öffentliche Symlinks sowie URL-Erkennung unabhängig vom privaten Dateipfad. Die Webmail-Suite führt je URL-Mount 97 Prüfungen aus; die oben aufgeführten sieben Aufrufe ergeben zusammen 464 Prüfungen. Der ImapEngine-Protokolltest benötigt die CLI-Erweiterung `pcntl` und wird ohne sie ausdrücklich übersprungen; die HTTP-Suite benötigt `proc_open`, lokale TCP-Sockets und Symlinks.
+Die Suites prüfen Mirror/Storage, Recovery, Locks, 50.000 Locations und bytegetreue 100-MB-EMLs, das IMAP-Protokoll, relative Datenpfade, Konfigurations-Overrides und URL-Mounts. `tests/security.php` ergänzt Prozessrennen bei Loginlimits, Kapazitäts-/Ablaufgrenzen, Vorschau-Regeln, Textfallback und DNS-/Bildschutz mit synthetischen Resolvern und Transporten ohne externe Netzabrufe. Die tatsächliche Anzahl der Prüfungen steht jeweils am Ende der Suite. Der ImapEngine-Protokolltest benötigt die CLI-Erweiterung `pcntl` und wird ohne sie ausdrücklich übersprungen; die HTTP-Suite benötigt `proc_open`, lokale TCP-Sockets und Symlinks.
 
 `tests/webmail.php` startet einen eigenen lokalen PHP-Server, dessen DocumentRoot ausschließlich öffentliche Dateien beziehungsweise Symlinks darauf enthält. Mit `--mount` läuft dieselbe API-Suite unter einem frei gewählten URL-Unterordner. Sie prüft echte Sessions, Cookie-Scoping, relative Assets, Query-Routing, gesperrte private Dateien, Ownership, Cursor-Pagination, MIME/Anhänge/EML, Sync-Status/-Fehler und adversariale HTML-Sanitization. Die Daten sind synthetisch; echte IMAP-Konten werden nicht angesprochen.
 
 Optionale Browser-QA verwendet die [Playwright Library](https://playwright.dev/docs/library), nicht den Playwright-Test-Runner. Node.js und npm werden ausschließlich auf dem Entwicklungsrechner benötigt. Verwende eine von Playwright unterstützte Node-Version; erforderliche Linux-Systembibliotheken und Browserinstallation beschreibt die [Playwright-Browserdokumentation](https://playwright.dev/docs/browsers).
 
-Zuerst in einem Terminal aus dem Projektverzeichnis die isolierte PHP-Testumgebung starten und laufen lassen:
-
-```bash
-php tests/webmail.php --mount=/mail --serve
-```
-
-Die Ausgabe enthält `BROWSER_QA_URL` mit der vollständigen lokalen Test-URL einschließlich Port und Unterordner. Die Umgebung enthält ausschließlich synthetische Konten und Nachrichten. Die vollständige Browser-Suite darf nicht gegen produktive Mailaccounts laufen.
-
-In einem zweiten Terminal ebenfalls ins Projektverzeichnis wechseln. Das folgende Bash-Beispiel installiert die optionalen Werkzeuge außerhalb des Repository, ohne `package.json`, Lockdateien oder `node_modules/` im Projekt anzulegen:
+Das folgende Bash-Beispiel wird aus dem Projektverzeichnis ausgeführt und installiert die optionalen Werkzeuge außerhalb des Repository, ohne `package.json`, Lockdateien oder `node_modules/` im Projekt anzulegen:
 
 ```bash
 foresightQaDir="$(mktemp -d)"
-npm install --prefix "$foresightQaDir" --no-save --package-lock=false playwright
+npm install --prefix "$foresightQaDir" --no-save --package-lock=false playwright@1.62.1
 export NODE_PATH="$foresightQaDir/node_modules"
 "$foresightQaDir/node_modules/.bin/playwright" install chromium
 
-# <port> durch den Port aus BROWSER_QA_URL ersetzen; die Anführungszeichen beibehalten.
-node tests/browser.cjs 'http://127.0.0.1:<port>/mail/'
-node tests/column-resize.cjs 'http://127.0.0.1:<port>/mail/'
+node tests/preview-rules.mjs
+bash tests/run-browser.sh
 ```
 
-`NODE_PATH` macht die separat installierte Bibliothek für die CommonJS-Testskripte auffindbar; die Variable gilt in diesem Terminal. Nach den Tests die PHP-Testumgebung mit Strg+C beenden. Bei einer späteren Testsitzung die Werkzeuge erneut einrichten oder den vorhandenen Werkzeugpfad wieder verwenden.
+`NODE_PATH` macht die separat installierte Bibliothek für die CommonJS-Testskripte auffindbar; die Variable gilt in diesem Terminal. `tests/run-browser.sh` startet eine isolierte PHP-Testumgebung mit synthetischen Konten, führt die drei Browser-Suites aus und beendet die Umgebung anschließend. Optional wählt `FORESIGHT_NODE` den Node-Dateipfad. Die vollständigen Browser-Suites dürfen nicht gegen produktive Konten laufen. Für manuelle QA startet `php tests/webmail.php --mount=/mail --serve` die Umgebung und gibt `BROWSER_QA_URL` aus; danach mit Strg+C beenden.
 
-`WEBMAIL_SCREENSHOTS` legt den Ausgabeordner der Browser-Suite fest. Die Tests prüfen Login, HTML/Text, Header, Downloads, Einstellungen/Identität, Suche/Favoriten, Spaltenwahl und persistierte Reihenfolge, Drag-and-drop, Resizer, mobile Ansicht, Benutzerwechsel und verspätete Antworten. Es dürfen weder JavaScript-Fehler noch unerwünschte externe Abrufe auftreten. Die separate Spaltenprüfung verwendet ausschließlich synthetischen Browserzustand ohne Server-Schreibzugriffe.
+`WEBMAIL_SCREENSHOTS` legt bei direktem Aufruf den Ausgabeordner der allgemeinen Browser-Suite fest; der Runner verwendet dafür ein eigenes temporäres Verzeichnis. Die Tests prüfen Login, HTML/Text, Header, Downloads, Einstellungen/Identität, Suche/Favoriten, Spaltenwahl und persistierte Reihenfolge, Drag-and-drop, Resizer, mobile Ansicht, Benutzerwechsel und verspätete Antworten. `tests/preview.cjs` prüft Textstandard, alle vier Regeloptionen, Priorität, Persistenz, CRUD, Optionssprung, Mobilansicht und Benutzertrennung. Es dürfen weder JavaScript-Fehler noch unerwünschte externe Abrufe auftreten. Die separate Spaltenprüfung verwendet ausschließlich synthetischen Browserzustand ohne Server-Schreibzugriffe.
+
+### Automatische Tests
+
+[.github/workflows/tests.yml](.github/workflows/tests.yml) startet bei Push, Pull Request und manuellem Aufruf. PHP 8.3/8.4 prüfen Syntax, Composer, Backend, Sicherheitsfälle und die API an vier URL-Mounts; ein weiterer Job prüft Regeln und Browser unter PHP 8.3/Node 24. Actions sind auf Commit-SHAs und Playwright auf eine getestete Version festgelegt. Der Workflow benötigt keine Secrets und hat nur Lesezugriff auf das Repository. Er verwendet keine echten Konten oder produktiven Daten und wird nach dem Push der Workflow-Datei auf GitHub ausgeführt.
 
 ## Bekannte Grenzen
 
@@ -302,7 +313,7 @@ node tests/column-resize.cjs 'http://127.0.0.1:<port>/mail/'
 - Keine automatische Garbage Collection von EML-Objekten; referenzlose historische Inhalte bleiben erhalten. Abgeleitete Webmail-Indizes können bei angehaltenen Zugriffen entfernt und wieder aufgebaut werden.
 - Die bestehende ImapEngine-Verarbeitung hält einen vollständigen IMAP-Literal beim Download als PHP-String. Standard-Memory-Limit ist 512 MiB; das 100-MB-Ziel wird getestet. MIME-Lesezugriff arbeitet anschließend mit Datei-Streams.
 - Die Sicherheitsgrenzen eines Servers gelten weiterhin: kompromittierter PHP-Prozess/Host kann den privaten Secret Store lesen.
-- Die bestehende Authentifizierung bietet noch keine eingebaute Login-Drosselung oder MFA. Für öffentlich erreichbaren Betrieb Registrierung bewusst einschränken und vorgelagerten Zugriffsschutz/Rate-Limits konfigurieren.
+- MFA ist nicht implementiert. Die Login-Drosselung verwendet ausschließlich `REMOTE_ADDR`, nicht ungeprüfte Forwarded-Header. Hinter einem Reverse Proxy müssen die echten Clientadressen durch die vertrauenswürdige Webserver-Konfiguration bereitgestellt werden; andernfalls teilen Clients die Proxy-IP-Limits. Für öffentlichen Betrieb Registrierung bewusst einschränken und vorgelagerten Zugriffsschutz ergänzen. Die dateibasierte Drosselung ersetzt keinen Schutz gegen verteilte Angriffe oder Überlastung.
 
 Aktuelle Integrationsaufgaben und technische Folgearbeiten: [TODO.md](TODO.md).
 

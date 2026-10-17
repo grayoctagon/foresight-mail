@@ -1,6 +1,7 @@
 import {api, url} from './api.js';
 import {$, $$, esc, fmtDate, fmtSize, address, loading, toast, confirmAction} from './ui.js';
-import {state, savePreferences, folderKey, messageKey, messagePath} from './state.js';
+import {state, savePreferences, savePreviewPreferences, folderKey, messageKey, messagePath} from './state.js';
+import {previewMode, senderTargets, togglePreviewRule, previewWarning} from './preview-rules.js';
 
 export const columns = [
     ['message','Nachricht',310,'from'], ['date','Empfangen',135,'date'], ['bytes','Größe',90,'bytes'],
@@ -9,7 +10,8 @@ export const columns = [
     ['urgency','Antwort',100,null], ['answerBy','Beantworten bis',130,null], ['importance','Wichtigkeit',95,null], ['report','Melden',115,null],
 ];
 let listController, messageController, listGeneration = 0, previewGeneration = 0;
-let detail = null, body = null, bodyMode = 'html';
+let detail = null, body = null, bodyMode = 'text';
+let savingPreviewRule = false;
 let activeFavorite = null, editingFavorite = null;
 let renderStart = -1;
 let columnDrag = null, blockColumnDrag = false, suppressColumnClickUntil = 0;
@@ -272,7 +274,7 @@ export async function openMessage(m) {
     try {
         const data = await api(messagePath(m),{signal});
         if (generation !== previewGeneration) return;
-        detail = data.message; bodyMode = detail.hasHtml?'html':'text'; renderPreview();
+        detail = data.message; bodyMode = previewMode(state.preferences, detail); renderPreview();
         if (detail.contentState === 'available') await loadBody(false,generation,signal);
     } catch (error) {
         if (error.name==='AbortError'||generation!==previewGeneration) return;
@@ -290,6 +292,26 @@ async function loadBody(external = false, generation = previewGeneration, signal
         $('#bodyBox').innerHTML = `<div class="form-message">${esc(error.message)}</div><button class="btn" id="retryBody">Inhalt erneut laden</button>`;
     }
 }
+function previewRuleMenu(message) {
+    const sender = senderTargets(message.from.email), rules = state.preferences.previewRules || [];
+    const options = sender ? [['address',sender.address,'html'],['address',sender.address,'text'],['domain',sender.domain,'html'],['domain',sender.domain,'text']] : [];
+    return `<div class="menu-wrap preview-menu-wrap"><button class="btn small" id="previewRulesBtn" aria-label="Vorschau-Regeln" aria-haspopup="menu" aria-expanded="false" title="Vorschau-Regeln">⋮</button><div class="menu preview-rules-menu" id="previewRulesMenu" role="menu" aria-label="Vorschau-Regeln">
+        <p class="preview-menu-warning">${esc(previewWarning)}</p>${options.map(([type,value,mode],i)=>{const checked=rules.some(r=>r.type===type&&r.value===value&&r.mode===mode);return `<label class="preview-rule-option"><input type="checkbox" data-preview-rule="${i}" ${checked?'checked':''} ${savingPreviewRule?'disabled':''}><span>Mails von ${esc(type==='domain'?'@'+value:value)} immer in ${mode==='html'?'HTML':'Text'} anzeigen lassen</span></label>`;}).join('') || '<p class="settings-note">Keine gültige Absenderadresse für eine Regel vorhanden.</p>'}<button id="previewRuleSettings" role="menuitem">Details in Optionen</button></div></div>`;
+}
+async function changePreviewRule(index) {
+    const sender = senderTargets(detail?.from?.email);
+    if (!sender || savingPreviewRule) return;
+    const options = [['address',sender.address,'html'],['address',sender.address,'text'],['domain',sender.domain,'html'],['domain',sender.domain,'text']];
+    if (!options[index]) return;
+    const session=state.session, generation=previewGeneration;
+    savingPreviewRule=true;
+    $('#previewRulesMenu').querySelectorAll('input').forEach(el=>el.disabled=true);
+    try {
+        await savePreviewPreferences(state.preferences.previewMode || 'text',togglePreviewRule(state.preferences.previewRules || [],...options[index]));
+        if (state.session===session && generation===previewGeneration) toast('Vorschau-Regel gespeichert.','success');
+    } catch(error) { if(state.session===session && generation===previewGeneration) toast(error.message,'danger'); }
+    finally { savingPreviewRule=false;if(state.session===session && generation===previewGeneration)renderPreview(); }
+}
 function renderPreview() {
     if (!detail) {
         $('#previewToolbar').innerHTML = '';
@@ -302,10 +324,10 @@ function renderPreview() {
         <button class="btn small" id="toggleDetails">Details</button><div class="details-box" id="detailsBox"><b>Reply-To:</b> ${esc(m.replyTo.map(address).join('; ')||'–')}<br><b>Message-ID:</b> ${esc(m.messageId||'–')}<br><b>Ordner:</b> ${esc(state.folders.find(f=>f.id===m.folderId&&f.accountId===m.accountId)?.name||'–')}<br><b>UID:</b> ${m.uid}</div>
         <div class="ai-panel"><div class="metric"><div class="metric-label">SpamLvl</div><div class="metric-value">${m.spamScore==null?'–':esc(m.spamScore)}</div><div class="metric-detail">Aus Nachrichtenheader</div></div>${['Antwort-Dringlichkeit','Beantworten bis','AI-Wichtigkeit'].map(label=>`<div class="metric"><div class="metric-label">${label}</div><div class="metric-value">–</div><div class="metric-detail">AI nicht verfügbar</div></div>`).join('')}</div>
         <div class="attachment-bar">${m.attachments.map(a=>`<a class="attachment" href="${esc(url(messagePath(m)+'/attachments/'+encodeURIComponent(a.id)))}"><span>📎</span><div><div class="att-name">${esc(a.name)}</div><div class="att-size">${esc(a.mime)}</div></div><span>↓</span></a>`).join('')}</div>
-        ${m.contentState==='pending'?'<div class="load-body">Der Inhalt ist noch nicht lokal gespeichert. Starte oder setze die Synchronisation fort.</div>':`<div class="settings-actions"><button class="btn small" id="bodyHtml" ${!m.hasHtml?'disabled':''}>HTML</button><button class="btn small" id="bodyText">Plaintext</button></div><div id="bodyBox" class="body-box">${body?'':loading('Nachrichteninhalt wird geladen …')}</div>`}`;
+        ${m.contentState==='pending'?'<div class="load-body">Der Inhalt ist noch nicht lokal gespeichert. Starte oder setze die Synchronisation fort.</div>':`<div class="settings-actions preview-format-actions"><button class="btn small ${bodyMode==='html'?'accent':''}" id="bodyHtml" aria-pressed="${bodyMode==='html'}" ${!m.hasHtml?'disabled':''}>HTML</button><button class="btn small ${bodyMode==='text'?'accent':''}" id="bodyText" aria-pressed="${bodyMode==='text'}">Plaintext</button>${previewRuleMenu(m)}</div><div id="bodyBox" class="body-box">${body?'':loading('Nachrichteninhalt wird geladen …')}</div>`}`;
     if (!body || !$('#bodyBox')) return;
     $('#bodyBox').innerHTML = (body.truncated?'<p class="settings-note">Die Vorschau ist auf 2 MiB pro Body begrenzt. Die vollständige Nachricht steht als EML bereit.</p>':'') +
-        (bodyMode==='html'&&body.html ? `${!body.externalAllowed?'<div class="external-warning">⚠ Externe Inhalte sind blockiert. <button class="btn small" id="loadExternal">Externe Bilder laden</button></div>':''}<iframe class="html-frame" id="htmlFrame" title="Isolierter Nachrichteninhalt" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>` : `<pre>${esc(body.text || 'Kein Plaintext-Teil vorhanden. Verwende die HTML-Ansicht.')}</pre>`);
+        (bodyMode==='html'&&body.html ? `${!body.externalAllowed?'<div class="external-warning">⚠ Externe Bilder sind blockiert. Nach Freigabe lädt der Server öffentliche HTTPS-Bilder; Tracking ist möglich. <button class="btn small" id="loadExternal">Externe Bilder laden</button></div>':`<div class="settings-note">${Number(body.externalImages?.loaded || 0)} externe Bilder eingebettet; ${Number(body.externalImages?.blocked || 0)} nicht geladen (Sicherheitsfilter, Format, Erreichbarkeit oder Limit).</div>`}<iframe class="html-frame" id="htmlFrame" title="Isolierter Nachrichteninhalt" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>` : `${body.textDerivedFromHtml?'<p class="settings-note">Textfassung aus dem bereinigten HTML-Inhalt.</p>':''}<pre>${esc(body.text || 'Kein darstellbarer Textinhalt vorhanden.')}</pre>`);
     if ($('#htmlFrame')) $('#htmlFrame').srcdoc = body.html;
 }
 
@@ -390,11 +412,19 @@ export function setupMail() {
         if(!detail)return;
         if(e.target.closest('#toggleDetails'))$('#detailsBox').classList.toggle('show');
         if(e.target.closest('#showHeaders')){$('#headerRaw').textContent=detail.headers.map(h=>h.name+': '+h.value).join('\n');$('#headersDialog').showModal();}
+        if(e.target.closest('#previewRulesBtn')){
+            const menu=$('#previewRulesMenu'), button=$('#previewRulesBtn'), open=menu.classList.toggle('show');button.setAttribute('aria-expanded',String(open));
+            if(open){const rect=button.getBoundingClientRect();menu.style.left=Math.max(8,Math.min(rect.left,innerWidth-menu.offsetWidth-8))+'px';menu.style.top=Math.max(8,Math.min(rect.bottom+4,innerHeight-menu.offsetHeight-8))+'px';}
+            return;
+        }
+        if(e.target.matches('[data-preview-rule]')){changePreviewRule(Number(e.target.dataset.previewRule));return;}
+        if(e.target.closest('#previewRuleSettings')){window.dispatchEvent(new Event('open-preview-settings'));return;}
         if(e.target.closest('#bodyText')){bodyMode='text';renderPreview();}
         if(e.target.closest('#bodyHtml')){bodyMode='html';renderPreview();}
         if(e.target.closest('#loadExternal'))loadBody(true);
         if(e.target.closest('#retryBody'))loadBody(false);
     };
+    window.addEventListener('preview-preferences-changed',()=>{if(detail){bodyMode=previewMode(state.preferences,detail);renderPreview();}});
     document.addEventListener('keydown',e=>{
         if(['INPUT','SELECT','TEXTAREA','BUTTON'].includes(document.activeElement?.tagName)||$('dialog[open]')||state.settingsSection)return;
         if(e.key==='/'){e.preventDefault();$('#quickSearch').focus();}
